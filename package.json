@@ -1,0 +1,21 @@
+{
+  "name": "english-lexical-worker",
+  "version": "1.0.0",
+  "description": "Lexical resources API on Cloudflare Workers",
+  "private": true,
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250917.0",
+    "typescript": "5.8.3",
+    "wrangler": "^4.37.0"
+  },
+  "scripts": {
+    "cf-typegen": "wrangler types",
+    "check": "tsc && wrangler deploy --dry-run",
+    "test": "node --experimental-strip-types --experimental-default-type=module --test tests/*.test.mjs",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "sharp", "workerd"]
+  }
+}
