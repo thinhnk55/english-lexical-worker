@@ -18,4 +18,6 @@ test('stores the lexical fields and enforces text/type uniqueness', () => {
   assert.match(migration, /translations TEXT NOT NULL DEFAULT '\{\}'/)
   assert.match(migration, /phonemes TEXT/)
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS idx_lexicals_text_type/)
+  assert.doesNotMatch(migration, /created_at/)
+  assert.doesNotMatch(migration, /updated_at/)
 })

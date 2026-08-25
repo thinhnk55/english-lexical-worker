@@ -3,9 +3,7 @@ CREATE TABLE IF NOT EXISTS lexicals (
   text TEXT NOT NULL,
   type TEXT NOT NULL,
   translations TEXT NOT NULL DEFAULT '{}',
-  phonemes TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  phonemes TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lexicals_text_type ON lexicals(text, type);

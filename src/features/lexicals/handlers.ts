@@ -8,8 +8,6 @@ interface LexicalRow {
   type: string;
   translations: string;
   phonemes: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
 interface Lexical {
@@ -18,8 +16,6 @@ interface Lexical {
   type: string;
   translations: Record<string, string>;
   phonemes: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
 interface LexicalInput {
@@ -139,7 +135,7 @@ export async function handleUpdateLexical(request: Request, env: Env, origin: st
   const input = await readInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    const result = await env.DB.prepare('UPDATE lexicals SET text = ?, type = ?, translations = ?, phonemes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    const result = await env.DB.prepare('UPDATE lexicals SET text = ?, type = ?, translations = ?, phonemes = ? WHERE id = ?')
       .bind(input.text, input.type, JSON.stringify(input.translations), input.phonemes, id)
       .run();
     if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
