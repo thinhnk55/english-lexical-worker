@@ -11,6 +11,8 @@ test('exposes the lexical CRUD routes', () => {
   assert.match(index, /request\.method === 'PUT'/)
   assert.match(index, /request\.method === 'DELETE'/)
   assert.match(index, /const match = url\.pathname\.match/)
+  assert.match(index, /url\.pathname === '\/sentences'/)
+  assert.match(index, /sentence-lexicals/)
 })
 
 test('stores the lexical fields and enforces text/type uniqueness', () => {
@@ -20,4 +22,7 @@ test('stores the lexical fields and enforces text/type uniqueness', () => {
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS idx_lexicals_text_type/)
   assert.doesNotMatch(migration, /created_at/)
   assert.doesNotMatch(migration, /updated_at/)
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS sentences/)
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS sentence_lexicals/)
+  assert.match(migration, /token_indexes TEXT/)
 })
