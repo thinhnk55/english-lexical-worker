@@ -80,6 +80,10 @@ function isUniqueConstraint(error: unknown): boolean {
   return error instanceof Error && /unique|constraint/i.test(error.message);
 }
 
+function isForeignKeyConstraint(error: unknown): boolean {
+  return error instanceof Error && /foreign key/i.test(error.message);
+}
+
 export async function handleListLexicals(request: Request, env: Env, origin: string): Promise<Response> {
   try {
     const url = new URL(request.url);
@@ -153,6 +157,7 @@ export async function handleDeleteLexical(env: Env, origin: string, id: string):
     if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
+    if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'Không thể xóa lexical đang được sentence sử dụng', origin);
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }

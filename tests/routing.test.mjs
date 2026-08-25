@@ -25,4 +25,6 @@ test('stores the lexical fields and enforces text/type uniqueness', () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS sentences/)
   assert.match(migration, /CREATE TABLE IF NOT EXISTS sentence_lexicals/)
   assert.match(migration, /token_indexes TEXT/)
+  assert.match(migration, /FOREIGN KEY \(sentence_id\) REFERENCES sentences\(id\) ON DELETE CASCADE/)
+  assert.match(migration, /FOREIGN KEY \(lexical_id\) REFERENCES lexicals\(id\) ON DELETE RESTRICT/)
 })

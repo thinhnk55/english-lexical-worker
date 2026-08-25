@@ -13,7 +13,7 @@ interface SentenceInput {
 interface SentenceLexicalInput {
   lexical_id: string;
   position: number | null;
-  token_indexes: string;
+  token_indexes: string | null;
 }
 
 function parseJson<T>(value: string | null, fallback: T): T {
@@ -47,12 +47,15 @@ function parseSentence(row: SentenceRow): Sentence {
 function parseSentenceLexical(row: SentenceLexicalRow): SentenceLexical {
   return {
     ...row,
-    token_indexes: row.token_indexes ?? '',
   };
 }
 
 function isResponse(value: SentenceInput | SentenceLexicalInput | Response): value is Response {
   return value instanceof Response;
+}
+
+function isForeignKeyConstraint(error: unknown): boolean {
+  return error instanceof Error && /foreign key/i.test(error.message);
 }
 
 async function readSentenceInput(request: Request, origin: string): Promise<SentenceInput | Response> {
@@ -86,7 +89,7 @@ async function readSentenceInput(request: Request, origin: string): Promise<Sent
   };
 }
 
-async function readSentenceLexicalInput(request: Request, env: Env, origin: string, sentenceId: string): Promise<SentenceLexicalInput | Response> {
+async function readSentenceLexicalInput(request: Request, origin: string): Promise<SentenceLexicalInput | Response> {
   let body: unknown;
   try {
     body = await request.json();
@@ -98,23 +101,15 @@ async function readSentenceLexicalInput(request: Request, env: Env, origin: stri
   }
   const value = body as Record<string, unknown>;
   const lexicalId = typeof value.lexical_id === 'string' ? value.lexical_id.trim() : '';
-  const tokenIndexes = typeof value.token_indexes === 'string' ? value.token_indexes.replace(/\s/g, '') : '';
+  const tokenIndexes = value.token_indexes === null || value.token_indexes === undefined
+    ? null
+    : typeof value.token_indexes === 'string' ? value.token_indexes : undefined;
   const position = value.position === null || value.position === undefined
     ? null
     : typeof value.position === 'number' && Number.isInteger(value.position) && value.position >= 0 ? value.position : -1;
   if (!lexicalId) return errorResponse(400, 'VALIDATION_ERROR', 'Thiếu lexical_id', origin);
-  if (!/^\d+(,\d+)*$/.test(tokenIndexes)) return errorResponse(400, 'VALIDATION_ERROR', 'token_indexes phải có dạng "1,4"', origin);
+  if (tokenIndexes === undefined) return errorResponse(400, 'VALIDATION_ERROR', 'token_indexes phải là chuỗi hoặc null', origin);
   if (position === -1) return errorResponse(400, 'VALIDATION_ERROR', 'position phải là số nguyên không âm hoặc null', origin);
-  const sentence = await env.DB.prepare('SELECT tokens FROM sentences WHERE id = ?').bind(sentenceId).first<Pick<SentenceRow, 'tokens'>>();
-  if (!sentence) return errorResponse(404, 'NOT_FOUND', 'Không tìm thấy sentence', origin);
-  const tokens = parseJson<unknown>(sentence.tokens, []);
-  const tokenCount = Array.isArray(tokens) ? tokens.length : 0;
-  const indexes = tokenIndexes.split(',').map(Number);
-  if (indexes.some(index => index < 0 || index >= tokenCount)) {
-    return errorResponse(400, 'VALIDATION_ERROR', 'token_indexes vượt quá số lượng tokens của sentence', origin);
-  }
-  const lexical = await env.DB.prepare('SELECT id FROM lexicals WHERE id = ?').bind(lexicalId).first<{ id: string }>();
-  if (!lexical) return errorResponse(404, 'NOT_FOUND', 'Không tìm thấy lexical', origin);
   return { lexical_id: lexicalId, position, token_indexes: tokenIndexes };
 }
 
@@ -175,7 +170,6 @@ export async function handleDeleteSentence(env: Env, origin: string, id: string)
   try {
     const result = await env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(id).run();
     if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
-    await env.DB.prepare('DELETE FROM sentence_lexicals WHERE sentence_id = ?').bind(id).run();
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
@@ -192,7 +186,7 @@ export async function handleListSentenceLexicals(env: Env, origin: string, sente
 }
 
 export async function handleCreateSentenceLexical(request: Request, env: Env, origin: string, sentenceId: string): Promise<Response> {
-  const input = await readSentenceLexicalInput(request, env, origin, sentenceId);
+  const input = await readSentenceLexicalInput(request, origin);
   if (isResponse(input)) return input;
   const id = generateUUIDv7();
   try {
@@ -201,6 +195,7 @@ export async function handleCreateSentenceLexical(request: Request, env: Env, or
       .run();
     return successResponse(201, 'CREATED', { id, sentence_id: sentenceId, ...input }, origin);
   } catch (error) {
+    if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'sentence_id hoặc lexical_id không tồn tại', origin);
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }
@@ -208,7 +203,7 @@ export async function handleCreateSentenceLexical(request: Request, env: Env, or
 export async function handleUpdateSentenceLexical(request: Request, env: Env, origin: string, id: string): Promise<Response> {
   const existing = await env.DB.prepare('SELECT sentence_id FROM sentence_lexicals WHERE id = ?').bind(id).first<{ sentence_id: string }>();
   if (!existing) return errorResponse(404, 'NOT_FOUND', undefined, origin);
-  const input = await readSentenceLexicalInput(request, env, origin, existing.sentence_id);
+  const input = await readSentenceLexicalInput(request, origin);
   if (isResponse(input)) return input;
   try {
     await env.DB.prepare('UPDATE sentence_lexicals SET lexical_id = ?, position = ?, token_indexes = ? WHERE id = ?')
@@ -216,6 +211,7 @@ export async function handleUpdateSentenceLexical(request: Request, env: Env, or
       .run();
     return successResponse(200, 'UPDATED', { id, sentence_id: existing.sentence_id, ...input }, origin);
   } catch (error) {
+    if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'sentence_id hoặc lexical_id không tồn tại', origin);
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }

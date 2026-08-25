@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS sentence_lexicals (
   sentence_id TEXT NOT NULL,
   lexical_id TEXT NOT NULL,
   position INTEGER,
-  token_indexes TEXT
+  token_indexes TEXT,
+  FOREIGN KEY (sentence_id) REFERENCES sentences(id) ON DELETE CASCADE,
+  FOREIGN KEY (lexical_id) REFERENCES lexicals(id) ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sentences_text ON sentences(text);

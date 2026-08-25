@@ -27,5 +27,5 @@ export interface SentenceLexical {
   sentence_id: string;
   lexical_id: string;
   position: number | null;
-  token_indexes: string;
+  token_indexes: string | null;
 }
