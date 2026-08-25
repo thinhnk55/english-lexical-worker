@@ -13,6 +13,8 @@ test('exposes the lexical CRUD routes', () => {
   assert.match(index, /const match = url\.pathname\.match/)
   assert.match(index, /url\.pathname === '\/sentences'/)
   assert.match(index, /sentence-lexicals/)
+  assert.match(index, /url\.pathname === '\/readings'/)
+  assert.match(index, /readingSentencesMatch/)
 })
 
 test('stores the lexical fields and enforces text/type uniqueness', () => {
@@ -27,4 +29,8 @@ test('stores the lexical fields and enforces text/type uniqueness', () => {
   assert.match(migration, /token_indexes TEXT/)
   assert.match(migration, /FOREIGN KEY \(sentence_id\) REFERENCES sentences\(id\) ON DELETE CASCADE/)
   assert.match(migration, /FOREIGN KEY \(lexical_id\) REFERENCES lexicals\(id\) ON DELETE RESTRICT/)
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS readings/)
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS reading_sentences/)
+  assert.match(migration, /PRIMARY KEY \(reading_id, position\)/)
+  assert.match(migration, /FOREIGN KEY \(title_sentence_id\) REFERENCES sentences\(id\) ON DELETE RESTRICT/)
 })

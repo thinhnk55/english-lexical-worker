@@ -19,6 +19,17 @@ import {
   handleUpdateSentence,
   handleUpdateSentenceLexical,
 } from './features/sentences/handlers';
+import {
+  handleAddReadingSentence,
+  handleCreateReading,
+  handleDeleteReading,
+  handleDeleteReadingSentence,
+  handleGetReading,
+  handleListReadingSentences,
+  handleListReadings,
+  handleUpdateReading,
+  handleUpdateReadingSentence,
+} from './features/readings/handlers';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -43,6 +54,26 @@ export default {
     if (url.pathname === '/sentences') {
       if (request.method === 'GET') return handleListSentences(request, env, origin);
       if (request.method === 'POST') return handleCreateSentence(request, env, origin);
+      return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
+    }
+
+    if (url.pathname === '/readings') {
+      if (request.method === 'GET') return handleListReadings(request, env, origin);
+      if (request.method === 'POST') return handleCreateReading(request, env, origin);
+      return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
+    }
+
+    const readingSentencesMatch = url.pathname.match(/^\/readings\/([^/]+)\/sentences$/);
+    if (readingSentencesMatch) {
+      if (request.method === 'GET') return handleListReadingSentences(env, origin, readingSentencesMatch[1]);
+      if (request.method === 'POST') return handleAddReadingSentence(request, env, origin, readingSentencesMatch[1]);
+      return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
+    }
+
+    const readingSentenceMatch = url.pathname.match(/^\/readings\/([^/]+)\/sentences\/([^/]+)$/);
+    if (readingSentenceMatch) {
+      if (request.method === 'PUT') return handleUpdateReadingSentence(request, env, origin, readingSentenceMatch[1], readingSentenceMatch[2]);
+      if (request.method === 'DELETE') return handleDeleteReadingSentence(env, origin, readingSentenceMatch[1], readingSentenceMatch[2]);
       return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
     }
 
@@ -73,6 +104,14 @@ export default {
       if (request.method === 'GET') return handleGetSentence(env, origin, sentenceMatch[1]);
       if (request.method === 'PUT') return handleUpdateSentence(request, env, origin, sentenceMatch[1]);
       if (request.method === 'DELETE') return handleDeleteSentence(env, origin, sentenceMatch[1]);
+      return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
+    }
+
+    const readingMatch = url.pathname.match(/^\/readings\/([^/]+)$/);
+    if (readingMatch) {
+      if (request.method === 'GET') return handleGetReading(env, origin, readingMatch[1]);
+      if (request.method === 'PUT') return handleUpdateReading(request, env, origin, readingMatch[1]);
+      if (request.method === 'DELETE') return handleDeleteReading(env, origin, readingMatch[1]);
       return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
     }
 
