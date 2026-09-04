@@ -5,6 +5,8 @@ import {
   handleCreateLexical,
   handleDeleteLexical,
   handleGetLexical,
+  handleCheckLexicalDuplicates,
+  handleBulkLexicals,
   handleListLexicals,
   handleUpdateLexical,
 } from './features/lexicals/handlers';
@@ -49,6 +51,13 @@ export default {
       if (request.method === 'GET') return handleListLexicals(request, env, origin);
       if (request.method === 'POST') return handleCreateLexical(request, env, origin);
       return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
+    }
+
+    if (url.pathname === '/lexicals/check-duplicates' && request.method === 'POST') {
+      return handleCheckLexicalDuplicates(request, env, origin);
+    }
+    if (url.pathname === '/lexicals/bulk' && request.method === 'POST') {
+      return handleBulkLexicals(request, env, origin);
     }
 
     if (url.pathname === '/sentences') {

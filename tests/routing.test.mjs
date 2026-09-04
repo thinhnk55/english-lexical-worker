@@ -17,6 +17,19 @@ test('exposes the lexical CRUD routes', () => {
   assert.match(index, /sentence-lexicals/)
   assert.match(index, /url\.pathname === '\/readings'/)
   assert.match(index, /readingSentencesMatch/)
+  assert.match(index, /lexicals\/check-duplicates/)
+  assert.match(index, /lexicals\/bulk/)
+})
+
+test('exposes the fixed lexical types and keeps duplicate review separate from bulk writes', async () => {
+  const constants = await readFile(new URL('../src/features/lexicals/constants.ts', import.meta.url), 'utf8')
+  const handlers = await readFile(new URL('../src/features/lexicals/handlers.ts', import.meta.url), 'utf8')
+  for (const type of ['vocabulary', 'phrase', 'collocation', 'phrasal_verb', 'idiom', 'pattern']) {
+    assert.match(constants, new RegExp(`'${type}'`))
+  }
+  assert.match(handlers, /handleCheckLexicalDuplicates/)
+  assert.match(handlers, /handleBulkLexicals/)
+  assert.match(handlers, /duplicate_in_batch/)
 })
 
 test('stores the lexical fields and enforces text/type uniqueness', () => {
