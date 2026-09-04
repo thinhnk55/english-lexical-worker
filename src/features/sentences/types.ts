@@ -4,6 +4,8 @@ export interface SentenceRow {
   tokens: string | null;
   translations: string | null;
   phonemes: string | null;
+  audio: string | null;
+  image: string | null;
 }
 
 export interface SentenceLexicalRow {
@@ -20,6 +22,8 @@ export interface Sentence {
   tokens: string[];
   translations: Record<string, string> | null;
   phonemes: string | null;
+  audio: string | null;
+  image: string | null;
 }
 
 export interface SentenceLexical {

@@ -2,6 +2,7 @@ import { successResponse, errorResponse } from '../../utils/response';
 import { parsePagination } from '../../utils/pagination';
 import { generateUUIDv7 } from '../../utils/uuid';
 import { isLexicalType, normalizeLexicalText, type LexicalType } from './constants';
+import { parseOptionalMediaUrl } from '../../utils/media';
 
 interface LexicalRow {
   id: string;
@@ -9,6 +10,8 @@ interface LexicalRow {
   type: string;
   translations: string;
   phonemes: string | null;
+  audio: string | null;
+  image: string | null;
 }
 
 interface Lexical {
@@ -17,6 +20,8 @@ interface Lexical {
   type: string;
   translations: Record<string, string>;
   phonemes: string | null;
+  audio: string | null;
+  image: string | null;
 }
 
 interface LexicalInput {
@@ -24,6 +29,8 @@ interface LexicalInput {
   type: LexicalType;
   translations: Record<string, string>;
   phonemes: string | null;
+  audio: string | null;
+  image: string | null;
 }
 
 function parseRow(row: LexicalRow): Lexical {
@@ -73,7 +80,18 @@ async function readInput(request: Request, origin: string): Promise<LexicalInput
   if (!isPhonemes(value.phonemes)) {
     return errorResponse(400, 'VALIDATION_ERROR', 'phonemes phải là chuỗi hoặc null', origin);
   }
-  return { text, type, translations: value.translations, phonemes: value.phonemes?.trim() || null };
+  const audio = parseOptionalMediaUrl(value.audio, 'audio', origin);
+  if (isResponse(audio)) return audio;
+  const image = parseOptionalMediaUrl(value.image, 'image', origin);
+  if (isResponse(image)) return image;
+  return {
+    text,
+    type,
+    translations: value.translations,
+    phonemes: value.phonemes?.trim() || null,
+    audio: audio ?? null,
+    image: image ?? null,
+  };
 }
 
 interface LexicalBatchItem extends LexicalInput {
@@ -128,7 +146,7 @@ async function findLexicalsByText(env: Env, text: string): Promise<Lexical[]> {
   return rows.results.map(parseRow);
 }
 
-function isResponse(value: LexicalInput | Response): value is Response {
+function isResponse(value: unknown): value is Response {
   return value instanceof Response;
 }
 
@@ -184,8 +202,8 @@ export async function handleCreateLexical(request: Request, env: Env, origin: st
   if (isResponse(input)) return input;
   const id = generateUUIDv7();
   try {
-    await env.DB.prepare('INSERT INTO lexicals (id, text, type, translations, phonemes) VALUES (?, ?, ?, ?, ?)')
-      .bind(id, input.text, input.type, JSON.stringify(input.translations), input.phonemes)
+    await env.DB.prepare('INSERT INTO lexicals (id, text, type, translations, phonemes, audio, image) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, input.text, input.type, JSON.stringify(input.translations), input.phonemes, input.audio, input.image)
       .run();
     const row = await env.DB.prepare('SELECT * FROM lexicals WHERE id = ?').bind(id).first<LexicalRow>();
     return successResponse(201, 'CREATED', row ? parseRow(row) : undefined, origin);
@@ -199,8 +217,8 @@ export async function handleUpdateLexical(request: Request, env: Env, origin: st
   const input = await readInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    const result = await env.DB.prepare('UPDATE lexicals SET text = ?, type = ?, translations = ?, phonemes = ? WHERE id = ?')
-      .bind(input.text, input.type, JSON.stringify(input.translations), input.phonemes, id)
+    const result = await env.DB.prepare('UPDATE lexicals SET text = ?, type = ?, translations = ?, phonemes = ?, audio = ?, image = ? WHERE id = ?')
+      .bind(input.text, input.type, JSON.stringify(input.translations), input.phonemes, input.audio, input.image, id)
       .run();
     if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     const row = await env.DB.prepare('SELECT * FROM lexicals WHERE id = ?').bind(id).first<LexicalRow>();
@@ -295,13 +313,13 @@ export async function handleBulkLexicals(request: Request, env: Env, origin: str
     if (item.action === 'skip') continue;
     if (item.action === 'update') {
       if (!item.existing_id) return errorResponse(400, 'VALIDATION_ERROR', `Thiếu existing_id cho ${item.client_key}`, origin);
-      statements.push(env.DB.prepare('UPDATE lexicals SET text = ?, type = ?, translations = ?, phonemes = ? WHERE id = ?')
-        .bind(item.text, item.type, JSON.stringify(item.translations), item.phonemes, item.existing_id));
+      statements.push(env.DB.prepare('UPDATE lexicals SET text = ?, type = ?, translations = ?, phonemes = ?, audio = ?, image = ? WHERE id = ?')
+        .bind(item.text, item.type, JSON.stringify(item.translations), item.phonemes, item.audio, item.image, item.existing_id));
       updatedKeys.push(item.client_key);
       continue;
     }
-    statements.push(env.DB.prepare('INSERT INTO lexicals (id, text, type, translations, phonemes) VALUES (?, ?, ?, ?, ?)')
-      .bind(generateUUIDv7(), item.text, item.type, JSON.stringify(item.translations), item.phonemes));
+    statements.push(env.DB.prepare('INSERT INTO lexicals (id, text, type, translations, phonemes, audio, image) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(generateUUIDv7(), item.text, item.type, JSON.stringify(item.translations), item.phonemes, item.audio, item.image));
     createdKeys.push(item.client_key);
   }
   try {

@@ -3,7 +3,9 @@ CREATE TABLE IF NOT EXISTS lexicals (
   text TEXT NOT NULL,
   type TEXT NOT NULL,
   translations TEXT NOT NULL DEFAULT '{}',
-  phonemes TEXT
+  phonemes TEXT,
+  audio TEXT,
+  image TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lexicals_text_type ON lexicals(text, type);
@@ -15,7 +17,9 @@ CREATE TABLE IF NOT EXISTS sentences (
   text TEXT NOT NULL,
   tokens TEXT,
   translations TEXT,
-  phonemes TEXT
+  phonemes TEXT,
+  audio TEXT,
+  image TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sentence_lexicals (
@@ -35,6 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_sentence_lexicals_lexical ON sentence_lexicals(le
 CREATE TABLE IF NOT EXISTS passages (
   id TEXT PRIMARY KEY NOT NULL,
   title_sentence_id TEXT NOT NULL,
+  image TEXT,
   FOREIGN KEY (title_sentence_id) REFERENCES sentences(id) ON DELETE RESTRICT
 );
 
@@ -49,6 +54,7 @@ CREATE TABLE IF NOT EXISTS paragraphs (
   id TEXT PRIMARY KEY NOT NULL,
   passage_id TEXT NOT NULL,
   position INTEGER NOT NULL,
+  image TEXT,
   FOREIGN KEY (passage_id) REFERENCES passages(id) ON DELETE CASCADE,
   UNIQUE (passage_id, position)
 );

@@ -2,12 +2,15 @@ import { successResponse, errorResponse } from '../../utils/response';
 import { parsePagination } from '../../utils/pagination';
 import { generateUUIDv7 } from '../../utils/uuid';
 import type { Sentence, SentenceLexical, SentenceLexicalRow, SentenceRow } from './types';
+import { parseOptionalMediaUrl } from '../../utils/media';
 
 interface SentenceInput {
   text: string;
   tokens: string[];
   translations: Record<string, string> | null;
   phonemes: string | null;
+  audio: string | null;
+  image: string | null;
 }
 
 interface SentenceLexicalInput {
@@ -41,6 +44,8 @@ function parseSentence(row: SentenceRow): Sentence {
     tokens: Array.isArray(tokens) && tokens.every(token => typeof token === 'string') ? tokens : [],
     translations: isTranslationMap(translations) ? translations : null,
     phonemes: row.phonemes,
+    audio: row.audio,
+    image: row.image,
   };
 }
 
@@ -50,7 +55,7 @@ function parseSentenceLexical(row: SentenceLexicalRow): SentenceLexical {
   };
 }
 
-function isResponse(value: SentenceInput | SentenceLexicalInput | Response): value is Response {
+function isResponse(value: unknown): value is Response {
   return value instanceof Response;
 }
 
@@ -81,11 +86,17 @@ async function readSentenceInput(request: Request, origin: string): Promise<Sent
   if (value.phonemes !== undefined && value.phonemes !== null && typeof value.phonemes !== 'string') {
     return errorResponse(400, 'VALIDATION_ERROR', 'phonemes phải là chuỗi hoặc null', origin);
   }
+  const audio = parseOptionalMediaUrl(value.audio, 'audio', origin);
+  if (isResponse(audio)) return audio;
+  const image = parseOptionalMediaUrl(value.image, 'image', origin);
+  if (isResponse(image)) return image;
   return {
     text,
     tokens,
     translations: value.translations === null || value.translations === undefined ? null : value.translations as Record<string, string>,
     phonemes: typeof value.phonemes === 'string' ? value.phonemes.trim() || null : null,
+    audio: audio ?? null,
+    image: image ?? null,
   };
 }
 
@@ -143,8 +154,8 @@ export async function handleCreateSentence(request: Request, env: Env, origin: s
   if (isResponse(input)) return input;
   const id = generateUUIDv7();
   try {
-    await env.DB.prepare('INSERT INTO sentences (id, text, tokens, translations, phonemes) VALUES (?, ?, ?, ?, ?)')
-      .bind(id, input.text, JSON.stringify(input.tokens), input.translations ? JSON.stringify(input.translations) : null, input.phonemes)
+    await env.DB.prepare('INSERT INTO sentences (id, text, tokens, translations, phonemes, audio, image) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, input.text, JSON.stringify(input.tokens), input.translations ? JSON.stringify(input.translations) : null, input.phonemes, input.audio, input.image)
       .run();
     return successResponse(201, 'CREATED', { id, ...input }, origin);
   } catch (error) {
@@ -156,8 +167,8 @@ export async function handleUpdateSentence(request: Request, env: Env, origin: s
   const input = await readSentenceInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    const result = await env.DB.prepare('UPDATE sentences SET text = ?, tokens = ?, translations = ?, phonemes = ? WHERE id = ?')
-      .bind(input.text, JSON.stringify(input.tokens), input.translations ? JSON.stringify(input.translations) : null, input.phonemes, id)
+    const result = await env.DB.prepare('UPDATE sentences SET text = ?, tokens = ?, translations = ?, phonemes = ?, audio = ?, image = ? WHERE id = ?')
+      .bind(input.text, JSON.stringify(input.tokens), input.translations ? JSON.stringify(input.translations) : null, input.phonemes, input.audio, input.image, id)
       .run();
     if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     return successResponse(200, 'UPDATED', { id, ...input }, origin);

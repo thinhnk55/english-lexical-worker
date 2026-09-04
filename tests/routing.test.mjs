@@ -53,3 +53,12 @@ test('uses a fresh passage/paragraph schema with explicit ordered sentence mappi
   assert.match(schema, /UNIQUE \(paragraph_id, position\)/)
   assert.doesNotMatch(schema, /readings/)
 })
+
+test('adds nullable audio and image fields to the baseline schema at the appropriate content levels', () => {
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS lexicals[\s\S]*?audio TEXT,[\s\S]*?image TEXT/)
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS sentences[\s\S]*?audio TEXT,[\s\S]*?image TEXT/)
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS passages[\s\S]*?image TEXT/)
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS paragraphs[\s\S]*?image TEXT/)
+  assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS passages[\s\S]*?audio TEXT/)
+  assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS paragraphs[\s\S]*?audio TEXT/)
+})

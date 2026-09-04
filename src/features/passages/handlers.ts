@@ -1,10 +1,12 @@
 import { successResponse, errorResponse } from '../../utils/response';
 import { parsePagination } from '../../utils/pagination';
 import { generateUUIDv7 } from '../../utils/uuid';
+import { parseOptionalMediaUrl } from '../../utils/media';
 
 interface PassageRow {
   id: string;
   title_sentence_id: string;
+  image: string | null;
 }
 
 interface PassageRuntimeRow {
@@ -16,6 +18,7 @@ interface ParagraphRow {
   id: string;
   passage_id: string;
   position: number;
+  image: string | null;
 }
 
 interface SentenceRow {
@@ -24,6 +27,8 @@ interface SentenceRow {
   tokens: string | null;
   translations: string | null;
   phonemes: string | null;
+  audio: string | null;
+  image: string | null;
 }
 
 interface ParagraphSentenceRow extends SentenceRow {
@@ -41,14 +46,18 @@ interface SentenceLexicalRuntimeRow {
   type: string;
   translations: string;
   phonemes: string | null;
+  audio: string | null;
+  image: string | null;
 }
 
 interface PassageInput {
   title_sentence_id: string;
+  image?: string | null;
 }
 
 interface PositionInput {
   position?: number;
+  image?: string | null;
 }
 
 interface ParagraphSentenceInput {
@@ -95,6 +104,8 @@ function parseSentence(row: SentenceRow) {
     tokens: Array.isArray(tokens) && tokens.every(token => typeof token === 'string') ? tokens : [],
     translations: isTranslationMap(translations) ? translations : null,
     phonemes: row.phonemes,
+    audio: row.audio,
+    image: row.image,
   };
 }
 
@@ -106,6 +117,8 @@ function parseLexical(row: SentenceLexicalRuntimeRow) {
     type: row.type,
     translations: isTranslationMap(translations) ? translations : {},
     phonemes: row.phonemes,
+    audio: row.audio,
+    image: row.image,
   };
 }
 
@@ -120,7 +133,9 @@ async function getSentenceDetail(env: Env, sentence: SentenceRow) {
       lexicals.text,
       lexicals.type,
       lexicals.translations,
-      lexicals.phonemes
+      lexicals.phonemes,
+      lexicals.audio,
+      lexicals.image
     FROM sentence_lexicals
     INNER JOIN lexicals ON lexicals.id = sentence_lexicals.lexical_id
     WHERE sentence_lexicals.sentence_id = ?
@@ -155,7 +170,9 @@ async function readPassageInput(request: Request, origin: string): Promise<Passa
   if (isResponse(body)) return body;
   const titleSentenceId = typeof body.title_sentence_id === 'string' ? body.title_sentence_id.trim() : '';
   if (!titleSentenceId) return errorResponse(400, 'VALIDATION_ERROR', 'Thiếu title_sentence_id', origin);
-  return { title_sentence_id: titleSentenceId };
+  const image = parseOptionalMediaUrl(body.image, 'image', origin);
+  if (isResponse(image)) return image;
+  return image === undefined ? { title_sentence_id: titleSentenceId } : { title_sentence_id: titleSentenceId, image };
 }
 
 function parsePosition(value: unknown, origin: string, required: boolean): number | undefined | Response {
@@ -171,7 +188,12 @@ async function readPositionInput(request: Request, origin: string, required = fa
   if (isResponse(body)) return body;
   const position = parsePosition(body.position, origin, required);
   if (isResponse(position)) return position;
-  return position === undefined ? {} : { position };
+  const image = parseOptionalMediaUrl(body.image, 'image', origin);
+  if (isResponse(image)) return image;
+  return {
+    ...(position === undefined ? {} : { position }),
+    ...(image === undefined ? {} : { image }),
+  };
 }
 
 async function readParagraphSentenceInput(request: Request, origin: string, requirePosition = false): Promise<ParagraphSentenceInput | Response> {
@@ -185,11 +207,11 @@ async function readParagraphSentenceInput(request: Request, origin: string, requ
 }
 
 async function getPassage(env: Env, id: string): Promise<PassageRow | null> {
-  return env.DB.prepare('SELECT id, title_sentence_id FROM passages WHERE id = ?').bind(id).first<PassageRow>();
+  return env.DB.prepare('SELECT id, title_sentence_id, image FROM passages WHERE id = ?').bind(id).first<PassageRow>();
 }
 
 async function getParagraph(env: Env, id: string): Promise<ParagraphRow | null> {
-  return env.DB.prepare('SELECT id, passage_id, position FROM paragraphs WHERE id = ?').bind(id).first<ParagraphRow>();
+  return env.DB.prepare('SELECT id, passage_id, position, image FROM paragraphs WHERE id = ?').bind(id).first<ParagraphRow>();
 }
 
 async function paragraphIds(env: Env, passageId: string): Promise<string[]> {
@@ -223,7 +245,9 @@ async function getParagraphDetail(env: Env, paragraph: ParagraphRow) {
       sentences.text,
       sentences.tokens,
       sentences.translations,
-      sentences.phonemes
+      sentences.phonemes,
+      sentences.audio,
+      sentences.image
     FROM paragraph_sentences
     INNER JOIN sentences ON sentences.id = paragraph_sentences.sentence_id
     WHERE paragraph_sentences.paragraph_id = ?
@@ -233,6 +257,7 @@ async function getParagraphDetail(env: Env, paragraph: ParagraphRow) {
     id: paragraph.id,
     passage_id: paragraph.passage_id,
     position: paragraph.position,
+    image: paragraph.image,
     sentences: await Promise.all(rows.results.map(async row => ({
       id: row.paragraph_sentence_id,
       position: row.position,
@@ -242,15 +267,15 @@ async function getParagraphDetail(env: Env, paragraph: ParagraphRow) {
 }
 
 async function getPassageDetail(env: Env, passage: PassageRow) {
-  const titleSentence = await env.DB.prepare('SELECT id, text, tokens, translations, phonemes FROM sentences WHERE id = ?')
+  const titleSentence = await env.DB.prepare('SELECT id, text, tokens, translations, phonemes, audio, image FROM sentences WHERE id = ?')
     .bind(passage.title_sentence_id)
     .first<SentenceRow>();
   if (!titleSentence) throw new Error('Passage title sentence not found');
-  const rows = await env.DB.prepare('SELECT id, passage_id, position FROM paragraphs WHERE passage_id = ? ORDER BY position ASC')
-    .bind(passage.id)
+  const rows = await env.DB.prepare('SELECT id, passage_id, position, image FROM paragraphs WHERE passage_id = ? ORDER BY position ASC')
     .all<ParagraphRow>();
   return {
     id: passage.id,
+    image: passage.image,
     title: await getSentenceDetail(env, titleSentence),
     paragraphs: await Promise.all(rows.results.map(paragraph => getParagraphDetail(env, paragraph))),
   };
@@ -321,7 +346,7 @@ export async function handleListPassages(request: Request, env: Env, origin: str
       ${where}
     `).bind(...params).first<{ total: number }>();
     const rows = await env.DB.prepare(`
-      SELECT passages.id, passages.title_sentence_id, sentences.text AS title_text
+      SELECT passages.id, passages.title_sentence_id, passages.image, sentences.text AS title_text
       FROM passages
       INNER JOIN sentences ON sentences.id = passages.title_sentence_id
       ${where}
@@ -334,6 +359,7 @@ export async function handleListPassages(request: Request, env: Env, origin: str
       id: row.id,
       title_sentence_id: row.title_sentence_id,
       title: row.title_text,
+      image: row.image,
     })), origin, { page, size, total: count?.total ?? 0 });
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
@@ -355,7 +381,7 @@ export async function handleCreatePassage(request: Request, env: Env, origin: st
   if (isResponse(input)) return input;
   const id = generateUUIDv7();
   try {
-    await env.DB.prepare('INSERT INTO passages (id, title_sentence_id) VALUES (?, ?)').bind(id, input.title_sentence_id).run();
+    await env.DB.prepare('INSERT INTO passages (id, title_sentence_id, image) VALUES (?, ?, ?)').bind(id, input.title_sentence_id, input.image ?? null).run();
     const passage = await getPassage(env, id);
     return successResponse(201, 'CREATED', passage ? await getPassageDetail(env, passage) : undefined, origin);
   } catch (error) {
@@ -368,7 +394,9 @@ export async function handleUpdatePassage(request: Request, env: Env, origin: st
   const input = await readPassageInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    const result = await env.DB.prepare('UPDATE passages SET title_sentence_id = ? WHERE id = ?').bind(input.title_sentence_id, id).run();
+    const result = input.image === undefined
+      ? await env.DB.prepare('UPDATE passages SET title_sentence_id = ? WHERE id = ?').bind(input.title_sentence_id, id).run()
+      : await env.DB.prepare('UPDATE passages SET title_sentence_id = ?, image = ? WHERE id = ?').bind(input.title_sentence_id, input.image, id).run();
     if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     const passage = await getPassage(env, id);
     return successResponse(200, 'UPDATED', passage ? await getPassageDetail(env, passage) : undefined, origin);
@@ -391,7 +419,7 @@ export async function handleDeletePassage(env: Env, origin: string, id: string):
 export async function handleListPassageParagraphs(env: Env, origin: string, passageId: string): Promise<Response> {
   try {
     if (!await getPassage(env, passageId)) return errorResponse(404, 'NOT_FOUND', undefined, origin);
-    const rows = await env.DB.prepare('SELECT id, passage_id, position FROM paragraphs WHERE passage_id = ? ORDER BY position ASC')
+    const rows = await env.DB.prepare('SELECT id, passage_id, position, image FROM paragraphs WHERE passage_id = ? ORDER BY position ASC')
       .bind(passageId)
       .all<ParagraphRow>();
     return successResponse(200, 'SUCCESS', await Promise.all(rows.results.map(paragraph => getParagraphDetail(env, paragraph))), origin);
@@ -410,7 +438,7 @@ export async function handleCreateParagraph(request: Request, env: Env, origin: 
     if (position > ids.length) return errorResponse(400, 'VALIDATION_ERROR', 'position vượt quá số paragraph hiện có', origin);
     const id = generateUUIDv7();
     await env.DB.batch([
-      env.DB.prepare('INSERT INTO paragraphs (id, passage_id, position) VALUES (?, ?, -1)').bind(id, passageId),
+      env.DB.prepare('INSERT INTO paragraphs (id, passage_id, position, image) VALUES (?, ?, -1, ?)').bind(id, passageId, input.image ?? null),
       ...orderStatements(env, 'paragraphs', 'passage_id', passageId, insertAt(ids, id, position)),
     ]);
     const paragraph = await getParagraph(env, id);
@@ -439,7 +467,9 @@ export async function handleUpdateParagraph(request: Request, env: Env, origin: 
     if (!paragraph) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     const ids = (await paragraphIds(env, paragraph.passage_id)).filter(paragraphId => paragraphId !== id);
     if (input.position > ids.length) return errorResponse(400, 'VALIDATION_ERROR', 'position vượt quá số paragraph hiện có', origin);
-    await env.DB.batch(orderStatements(env, 'paragraphs', 'passage_id', paragraph.passage_id, insertAt(ids, id, input.position!)));
+    const statements = orderStatements(env, 'paragraphs', 'passage_id', paragraph.passage_id, insertAt(ids, id, input.position!));
+    if (input.image !== undefined) statements.push(env.DB.prepare('UPDATE paragraphs SET image = ? WHERE id = ?').bind(input.image, id));
+    await env.DB.batch(statements);
     const updated = await getParagraph(env, id);
     return successResponse(200, 'UPDATED', updated ? await getParagraphDetail(env, updated) : undefined, origin);
   } catch (error) {
