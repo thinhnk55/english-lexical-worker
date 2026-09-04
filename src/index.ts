@@ -22,16 +22,24 @@ import {
   handleUpdateSentenceLexical,
 } from './features/sentences/handlers';
 import {
-  handleAddReadingSentence,
-  handleCreateReading,
-  handleDeleteReading,
-  handleDeleteReadingSentence,
-  handleGetReading,
-  handleListReadingSentences,
-  handleListReadings,
-  handleUpdateReading,
-  handleUpdateReadingSentence,
-} from './features/readings/handlers';
+  handleCreateParagraph,
+  handleCreateParagraphSentence,
+  handleCreatePassage,
+  handleDeleteParagraph,
+  handleDeleteParagraphSentence,
+  handleDeletePassage,
+  handleDeletePassageRuntime,
+  handleGetParagraph,
+  handleGetPassage,
+  handleGetPassageRuntime,
+  handleListParagraphSentences,
+  handleListPassageParagraphs,
+  handleListPassages,
+  handlePublishPassageRuntime,
+  handleUpdateParagraph,
+  handleUpdateParagraphSentence,
+  handleUpdatePassage,
+} from './features/passages/handlers';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -44,8 +52,21 @@ export default {
       });
     }
 
+    // Runtime is a pre-built public representation; only mutation endpoints
+    // below require an administrator and may perform joins against source data.
+    const passageRuntimeMatch = url.pathname.match(/^\/passages\/([^/]+)\/runtime$/);
+    if (passageRuntimeMatch && request.method === 'GET') {
+      return handleGetPassageRuntime(env, origin, passageRuntimeMatch[1]);
+    }
+
     const auth = await requireAdmin(request, env, origin);
     if (!auth.ok) return auth.response;
+
+    if (passageRuntimeMatch) {
+      if (request.method === 'PUT') return handlePublishPassageRuntime(env, origin, passageRuntimeMatch[1]);
+      if (request.method === 'DELETE') return handleDeletePassageRuntime(env, origin, passageRuntimeMatch[1]);
+      return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
+    }
 
     if (url.pathname === '/lexicals') {
       if (request.method === 'GET') return handleListLexicals(request, env, origin);
@@ -66,23 +87,23 @@ export default {
       return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
     }
 
-    if (url.pathname === '/readings') {
-      if (request.method === 'GET') return handleListReadings(request, env, origin);
-      if (request.method === 'POST') return handleCreateReading(request, env, origin);
+    if (url.pathname === '/passages') {
+      if (request.method === 'GET') return handleListPassages(request, env, origin);
+      if (request.method === 'POST') return handleCreatePassage(request, env, origin);
       return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
     }
 
-    const readingSentencesMatch = url.pathname.match(/^\/readings\/([^/]+)\/sentences$/);
-    if (readingSentencesMatch) {
-      if (request.method === 'GET') return handleListReadingSentences(env, origin, readingSentencesMatch[1]);
-      if (request.method === 'POST') return handleAddReadingSentence(request, env, origin, readingSentencesMatch[1]);
+    const passageParagraphsMatch = url.pathname.match(/^\/passages\/([^/]+)\/paragraphs$/);
+    if (passageParagraphsMatch) {
+      if (request.method === 'GET') return handleListPassageParagraphs(env, origin, passageParagraphsMatch[1]);
+      if (request.method === 'POST') return handleCreateParagraph(request, env, origin, passageParagraphsMatch[1]);
       return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
     }
 
-    const readingSentenceMatch = url.pathname.match(/^\/readings\/([^/]+)\/sentences\/([^/]+)$/);
-    if (readingSentenceMatch) {
-      if (request.method === 'PUT') return handleUpdateReadingSentence(request, env, origin, readingSentenceMatch[1], readingSentenceMatch[2]);
-      if (request.method === 'DELETE') return handleDeleteReadingSentence(env, origin, readingSentenceMatch[1], readingSentenceMatch[2]);
+    const paragraphSentencesMatch = url.pathname.match(/^\/paragraphs\/([^/]+)\/sentences$/);
+    if (paragraphSentencesMatch) {
+      if (request.method === 'GET') return handleListParagraphSentences(env, origin, paragraphSentencesMatch[1]);
+      if (request.method === 'POST') return handleCreateParagraphSentence(request, env, origin, paragraphSentencesMatch[1]);
       return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
     }
 
@@ -116,11 +137,26 @@ export default {
       return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
     }
 
-    const readingMatch = url.pathname.match(/^\/readings\/([^/]+)$/);
-    if (readingMatch) {
-      if (request.method === 'GET') return handleGetReading(env, origin, readingMatch[1]);
-      if (request.method === 'PUT') return handleUpdateReading(request, env, origin, readingMatch[1]);
-      if (request.method === 'DELETE') return handleDeleteReading(env, origin, readingMatch[1]);
+    const paragraphSentenceMatch = url.pathname.match(/^\/paragraph-sentences\/([^/]+)$/);
+    if (paragraphSentenceMatch) {
+      if (request.method === 'PUT') return handleUpdateParagraphSentence(request, env, origin, paragraphSentenceMatch[1]);
+      if (request.method === 'DELETE') return handleDeleteParagraphSentence(env, origin, paragraphSentenceMatch[1]);
+      return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
+    }
+
+    const paragraphMatch = url.pathname.match(/^\/paragraphs\/([^/]+)$/);
+    if (paragraphMatch) {
+      if (request.method === 'GET') return handleGetParagraph(env, origin, paragraphMatch[1]);
+      if (request.method === 'PUT') return handleUpdateParagraph(request, env, origin, paragraphMatch[1]);
+      if (request.method === 'DELETE') return handleDeleteParagraph(env, origin, paragraphMatch[1]);
+      return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
+    }
+
+    const passageMatch = url.pathname.match(/^\/passages\/([^/]+)$/);
+    if (passageMatch) {
+      if (request.method === 'GET') return handleGetPassage(env, origin, passageMatch[1]);
+      if (request.method === 'PUT') return handleUpdatePassage(request, env, origin, passageMatch[1]);
+      if (request.method === 'DELETE') return handleDeletePassage(env, origin, passageMatch[1]);
       return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
     }
 

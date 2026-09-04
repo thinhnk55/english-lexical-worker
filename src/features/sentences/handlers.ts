@@ -172,6 +172,7 @@ export async function handleDeleteSentence(env: Env, origin: string, id: string)
     if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
+    if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'Không thể xóa sentence đang được lexical hoặc paragraph sử dụng', origin);
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }
