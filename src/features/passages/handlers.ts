@@ -7,6 +7,9 @@ interface PassageRow {
   id: string;
   title_sentence_id: string;
   image: string | null;
+  summary: string | null;
+  difficulty: number | null;
+  reward_points: number;
 }
 
 interface PassageRuntimeRow {
@@ -52,7 +55,32 @@ interface SentenceLexicalRuntimeRow {
 
 interface PassageInput {
   title_sentence_id: string;
-  image?: string | null;
+  image: string | null;
+  summary: string | null;
+  difficulty: number | null;
+  reward_points: number;
+}
+
+interface PassageTermRow {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  translations: string;
+  position: number;
+  taxonomy_id: string;
+  taxonomy_code: string;
+  taxonomy_name: string;
+  taxonomy_selection_mode: string;
+}
+
+interface PassageActivityRow {
+  id: string;
+  code: string;
+  name: string;
+  position: number;
+  config: string;
+  is_enabled: number;
 }
 
 interface PositionInput {
@@ -172,7 +200,27 @@ async function readPassageInput(request: Request, origin: string): Promise<Passa
   if (!titleSentenceId) return errorResponse(400, 'VALIDATION_ERROR', 'Thiếu title_sentence_id', origin);
   const image = parseOptionalMediaUrl(body.image, 'image', origin);
   if (isResponse(image)) return image;
-  return image === undefined ? { title_sentence_id: titleSentenceId } : { title_sentence_id: titleSentenceId, image };
+  const summary = body.summary === undefined || body.summary === null
+    ? null
+    : typeof body.summary === 'string'
+      ? body.summary.trim() || null
+      : undefined;
+  if (summary === undefined) return errorResponse(400, 'VALIDATION_ERROR', 'summary phải là chuỗi hoặc null', origin);
+  const difficulty = body.difficulty === undefined || body.difficulty === null ? null : body.difficulty;
+  if (difficulty !== null && (!Number.isInteger(difficulty) || !Number.isSafeInteger(difficulty))) {
+    return errorResponse(400, 'VALIDATION_ERROR', 'difficulty phải là số nguyên an toàn hoặc null', origin);
+  }
+  const rewardPoints = body.reward_points === undefined ? 0 : body.reward_points;
+  if (!Number.isSafeInteger(rewardPoints) || (rewardPoints as number) < 0) {
+    return errorResponse(400, 'VALIDATION_ERROR', 'reward_points phải là số nguyên không âm', origin);
+  }
+  return {
+    title_sentence_id: titleSentenceId,
+    image: image ?? null,
+    summary,
+    difficulty: difficulty as number | null,
+    reward_points: rewardPoints as number,
+  };
 }
 
 function parsePosition(value: unknown, origin: string, required: boolean): number | undefined | Response {
@@ -207,7 +255,11 @@ async function readParagraphSentenceInput(request: Request, origin: string, requ
 }
 
 async function getPassage(env: Env, id: string): Promise<PassageRow | null> {
-  return env.DB.prepare('SELECT id, title_sentence_id, image FROM passages WHERE id = ?').bind(id).first<PassageRow>();
+  return env.DB.prepare(`
+    SELECT id, title_sentence_id, image, summary, difficulty, reward_points
+    FROM passages
+    WHERE id = ?
+  `).bind(id).first<PassageRow>();
 }
 
 async function getParagraph(env: Env, id: string): Promise<ParagraphRow | null> {
@@ -267,18 +319,78 @@ async function getParagraphDetail(env: Env, paragraph: ParagraphRow) {
 }
 
 async function getPassageDetail(env: Env, passage: PassageRow) {
-  const titleSentence = await env.DB.prepare('SELECT id, text, tokens, translations, phonemes, audio, image FROM sentences WHERE id = ?')
-    .bind(passage.title_sentence_id)
-    .first<SentenceRow>();
+  const [titleSentence, paragraphs, terms, activities] = await Promise.all([
+    env.DB.prepare('SELECT id, text, tokens, translations, phonemes, audio, image FROM sentences WHERE id = ?')
+      .bind(passage.title_sentence_id)
+      .first<SentenceRow>(),
+    env.DB.prepare('SELECT id, passage_id, position, image FROM paragraphs WHERE passage_id = ? ORDER BY position ASC')
+      .bind(passage.id)
+      .all<ParagraphRow>(),
+    env.DB.prepare(`
+      SELECT
+        term.id,
+        term.code,
+        term.name,
+        term.description,
+        term.translations,
+        term.position,
+        taxonomy.id AS taxonomy_id,
+        taxonomy.code AS taxonomy_code,
+        taxonomy.name AS taxonomy_name,
+        taxonomy.selection_mode AS taxonomy_selection_mode
+      FROM passage_terms assigned
+      JOIN taxonomy_terms term ON term.id = assigned.term_id
+      JOIN taxonomies taxonomy ON taxonomy.id = term.taxonomy_id
+      WHERE assigned.passage_id = ?
+      ORDER BY taxonomy.name ASC, term.position ASC, term.id ASC
+    `).bind(passage.id).all<PassageTermRow>(),
+    env.DB.prepare(`
+      SELECT id, code, name, position, config, is_enabled
+      FROM passage_activities
+      WHERE passage_id = ?
+      ORDER BY position ASC, id ASC
+    `).bind(passage.id).all<PassageActivityRow>(),
+  ]);
   if (!titleSentence) throw new Error('Passage title sentence not found');
-  const rows = await env.DB.prepare('SELECT id, passage_id, position, image FROM paragraphs WHERE passage_id = ? ORDER BY position ASC')
-    .all<ParagraphRow>();
   return {
     id: passage.id,
     image: passage.image,
+    summary: passage.summary,
+    difficulty: passage.difficulty,
+    reward_points: passage.reward_points,
     title: await getSentenceDetail(env, titleSentence),
-    paragraphs: await Promise.all(rows.results.map(paragraph => getParagraphDetail(env, paragraph))),
+    terms: terms.results.map(row => ({
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      description: row.description,
+      translations: parseJson<unknown>(row.translations, {}),
+      position: row.position,
+      taxonomy: {
+        id: row.taxonomy_id,
+        code: row.taxonomy_code,
+        name: row.taxonomy_name,
+        selection_mode: row.taxonomy_selection_mode,
+      },
+    })),
+    activities: activities.results.map(row => ({
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      position: row.position,
+      config: parseJson<unknown>(row.config, {}),
+      is_enabled: row.is_enabled === 1,
+    })),
+    paragraphs: await Promise.all(paragraphs.results.map(paragraph => getParagraphDetail(env, paragraph))),
   };
+}
+
+// Used only for an authenticated learner's history when an administrator has
+// removed the public runtime snapshot. Normal library reads always use
+// passages_runtime and avoid authoring joins.
+export async function buildPassageDetail(env: Env, passageId: string): Promise<unknown | null> {
+  const passage = await getPassage(env, passageId);
+  return passage ? getPassageDetail(env, passage) : null;
 }
 
 async function publishPassageRuntime(env: Env, passageId: string) {
@@ -346,20 +458,33 @@ export async function handleListPassages(request: Request, env: Env, origin: str
       ${where}
     `).bind(...params).first<{ total: number }>();
     const rows = await env.DB.prepare(`
-      SELECT passages.id, passages.title_sentence_id, passages.image, sentences.text AS title_text
+      SELECT
+        passages.id,
+        passages.title_sentence_id,
+        passages.image,
+        passages.summary,
+        passages.difficulty,
+        passages.reward_points,
+        sentences.text AS title_text,
+        CASE WHEN runtime.passage_id IS NULL THEN 0 ELSE 1 END AS is_published
       FROM passages
       INNER JOIN sentences ON sentences.id = passages.title_sentence_id
+      LEFT JOIN passages_runtime runtime ON runtime.passage_id = passages.id
       ${where}
       ORDER BY sentences.text ASC, passages.id ASC
       LIMIT ? OFFSET ?
     `)
       .bind(...params, size, offset)
-      .all<PassageRow & { title_text: string }>();
+      .all<PassageRow & { title_text: string; is_published: number }>();
     return successResponse(200, 'SUCCESS', rows.results.map(row => ({
       id: row.id,
       title_sentence_id: row.title_sentence_id,
       title: row.title_text,
       image: row.image,
+      summary: row.summary,
+      difficulty: row.difficulty,
+      reward_points: row.reward_points,
+      is_published: row.is_published === 1,
     })), origin, { page, size, total: count?.total ?? 0 });
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
@@ -381,7 +506,17 @@ export async function handleCreatePassage(request: Request, env: Env, origin: st
   if (isResponse(input)) return input;
   const id = generateUUIDv7();
   try {
-    await env.DB.prepare('INSERT INTO passages (id, title_sentence_id, image) VALUES (?, ?, ?)').bind(id, input.title_sentence_id, input.image ?? null).run();
+    await env.DB.prepare(`
+      INSERT INTO passages (id, title_sentence_id, image, summary, difficulty, reward_points)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      id,
+      input.title_sentence_id,
+      input.image,
+      input.summary,
+      input.difficulty,
+      input.reward_points,
+    ).run();
     const passage = await getPassage(env, id);
     return successResponse(201, 'CREATED', passage ? await getPassageDetail(env, passage) : undefined, origin);
   } catch (error) {
@@ -394,9 +529,18 @@ export async function handleUpdatePassage(request: Request, env: Env, origin: st
   const input = await readPassageInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    const result = input.image === undefined
-      ? await env.DB.prepare('UPDATE passages SET title_sentence_id = ? WHERE id = ?').bind(input.title_sentence_id, id).run()
-      : await env.DB.prepare('UPDATE passages SET title_sentence_id = ?, image = ? WHERE id = ?').bind(input.title_sentence_id, input.image, id).run();
+    const result = await env.DB.prepare(`
+      UPDATE passages
+      SET title_sentence_id = ?, image = ?, summary = ?, difficulty = ?, reward_points = ?
+      WHERE id = ?
+    `).bind(
+      input.title_sentence_id,
+      input.image,
+      input.summary,
+      input.difficulty,
+      input.reward_points,
+      id,
+    ).run();
     if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     const passage = await getPassage(env, id);
     return successResponse(200, 'UPDATED', passage ? await getPassageDetail(env, passage) : undefined, origin);

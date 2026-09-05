@@ -1,18 +1,20 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "compatibility_date": "2025-04-01",
-  "main": "src/index.ts",
-  "name": "english-lexical-worker",
-  "upload_source_maps": true,
-  "observability": { "enabled": true },
-  "vars": {
-    "JWT_PUBLIC_KEY_PEM": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5jR00KkslCDkxTFnJ8P4\nOF9epVDAGTuYzbymvIl0jDK/0qEc1zo1mQR/xIWKH+ddMw137HU3u0t1I8GJ1JDf\nL3eMpx5SS0VPSs5Nm50cYtvsIetYaSBC2VrEYI1/K1aH0unJ9HxVKDE3qhFqF+0H\nqL9QsoDehcQmnDPnNOgpccvMi6vriG7yKl1jDCFv1kfG8t9tz+PH1Apu1bHEV4xm\nvjxRgZGTqUyLZekZFKyle1ZBNg4bZ4hr76lGxELqc3f1ekTiU1m3i1isZlPRR2gp\nn8lbWT/9W0ZvmGx7JRcuaAD3+r6Nhy60XBUT+4Ef83JKv5u7GJbMRv1mPALMQmO7\n7QIDAQAB\n-----END PUBLIC KEY-----"
-  },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "english-lexical-db",
-      "database_id": "34c69018-ce91-4f14-91ed-600d48e0475e"
-    }
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"compatibility_date": "2025-04-01",
+	"main": "src/index.ts",
+	"name": "english-lexical-worker",
+	"upload_source_maps": true,
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"JWT_PUBLIC_KEY_PEM": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5jR00KkslCDkxTFnJ8P4\nOF9epVDAGTuYzbymvIl0jDK/0qEc1zo1mQR/xIWKH+ddMw137HU3u0t1I8GJ1JDf\nL3eMpx5SS0VPSs5Nm50cYtvsIetYaSBC2VrEYI1/K1aH0unJ9HxVKDE3qhFqF+0H\nqL9QsoDehcQmnDPnNOgpccvMi6vriG7yKl1jDCFv1kfG8t9tz+PH1Apu1bHEV4xm\nvjxRgZGTqUyLZekZFKyle1ZBNg4bZ4hr76lGxELqc3f1ekTiU1m3i1isZlPRR2gp\nn8lbWT/9W0ZvmGx7JRcuaAD3+r6Nhy60XBUT+4Ef83JKv5u7GJbMRv1mPALMQmO7\n7QIDAQAB\n-----END PUBLIC KEY-----"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "english-lexical-db",
+			"database_id": "08dc20a6-182a-406f-9d90-ed9679513f9d"
+		}
+	]
 }

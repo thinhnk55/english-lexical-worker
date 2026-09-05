@@ -1,3 +1,6 @@
+-- Core authoring graph:
+-- passage -> paragraphs -> sentences -> lexicals.
+
 CREATE TABLE IF NOT EXISTS lexicals (
   id TEXT PRIMARY KEY NOT NULL,
   text TEXT NOT NULL,
@@ -43,6 +46,7 @@ CREATE TABLE IF NOT EXISTS passages (
   FOREIGN KEY (title_sentence_id) REFERENCES sentences(id) ON DELETE RESTRICT
 );
 
+-- Admin explicitly publishes a fully hydrated snapshot to this table.
 CREATE TABLE IF NOT EXISTS passages_runtime (
   passage_id TEXT PRIMARY KEY NOT NULL,
   payload TEXT NOT NULL,
