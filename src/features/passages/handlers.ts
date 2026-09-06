@@ -2,6 +2,7 @@ import { successResponse, errorResponse } from '../../utils/response';
 import { parsePagination } from '../../utils/pagination';
 import { generateUUIDv7 } from '../../utils/uuid';
 import { parseOptionalMediaUrl } from '../../utils/media';
+import { deleteOrphanLexicalStatements, invalidateRuntimeStatements } from '../authoring/context';
 
 interface PassageRow {
   id: string;
@@ -42,8 +43,8 @@ interface ParagraphSentenceRow extends SentenceRow {
 interface SentenceLexicalRuntimeRow {
   id: string;
   sentence_id: string;
-  position: number | null;
-  token_indexes: string | null;
+  position: number;
+  token_indexes: string;
   lexical_id: string;
   text: string;
   type: string;
@@ -71,6 +72,8 @@ interface PassageTermRow {
   taxonomy_id: string;
   taxonomy_code: string;
   taxonomy_name: string;
+  taxonomy_description: string | null;
+  taxonomy_translations: string;
   taxonomy_selection_mode: string;
 }
 
@@ -89,8 +92,7 @@ interface PositionInput {
 }
 
 interface ParagraphSentenceInput {
-  sentence_id: string;
-  position?: number;
+  position: number;
 }
 
 const TEMPORARY_POSITION_OFFSET = 1_000_000;
@@ -147,36 +149,6 @@ function parseLexical(row: SentenceLexicalRuntimeRow) {
     phonemes: row.phonemes,
     audio: row.audio,
     image: row.image,
-  };
-}
-
-async function getSentenceDetail(env: Env, sentence: SentenceRow) {
-  const lexicalRows = await env.DB.prepare(`
-    SELECT
-      sentence_lexicals.id,
-      sentence_lexicals.sentence_id,
-      sentence_lexicals.position,
-      sentence_lexicals.token_indexes,
-      lexicals.id AS lexical_id,
-      lexicals.text,
-      lexicals.type,
-      lexicals.translations,
-      lexicals.phonemes,
-      lexicals.audio,
-      lexicals.image
-    FROM sentence_lexicals
-    INNER JOIN lexicals ON lexicals.id = sentence_lexicals.lexical_id
-    WHERE sentence_lexicals.sentence_id = ?
-    ORDER BY sentence_lexicals.position ASC, sentence_lexicals.id ASC
-  `).bind(sentence.id).all<SentenceLexicalRuntimeRow>();
-  return {
-    ...parseSentence(sentence),
-    lexicals: lexicalRows.results.map(row => ({
-      id: row.id,
-      position: row.position,
-      token_indexes: row.token_indexes,
-      lexical: parseLexical(row),
-    })),
   };
 }
 
@@ -244,14 +216,12 @@ async function readPositionInput(request: Request, origin: string, required = fa
   };
 }
 
-async function readParagraphSentenceInput(request: Request, origin: string, requirePosition = false): Promise<ParagraphSentenceInput | Response> {
+async function readParagraphSentenceInput(request: Request, origin: string): Promise<ParagraphSentenceInput | Response> {
   const body = await readBody(request, origin);
   if (isResponse(body)) return body;
-  const sentenceId = typeof body.sentence_id === 'string' ? body.sentence_id.trim() : '';
-  if (!sentenceId) return errorResponse(400, 'VALIDATION_ERROR', 'Thiếu sentence_id', origin);
-  const position = parsePosition(body.position, origin, requirePosition);
+  const position = parsePosition(body.position, origin, true);
   if (isResponse(position)) return position;
-  return position === undefined ? { sentence_id: sentenceId } : { sentence_id: sentenceId, position };
+  return { position: position! };
 }
 
 async function getPassage(env: Env, id: string): Promise<PassageRow | null> {
@@ -289,43 +259,117 @@ function insertAt(ids: string[], id: string, position: number): string[] {
 }
 
 async function getParagraphDetail(env: Env, paragraph: ParagraphRow) {
-  const rows = await env.DB.prepare(`
-    SELECT
-      paragraph_sentences.id AS paragraph_sentence_id,
-      paragraph_sentences.position,
-      sentences.id,
-      sentences.text,
-      sentences.tokens,
-      sentences.translations,
-      sentences.phonemes,
-      sentences.audio,
-      sentences.image
-    FROM paragraph_sentences
-    INNER JOIN sentences ON sentences.id = paragraph_sentences.sentence_id
-    WHERE paragraph_sentences.paragraph_id = ?
-    ORDER BY paragraph_sentences.position ASC
-  `).bind(paragraph.id).all<ParagraphSentenceRow>();
+  const [rows, lexicalRows] = await Promise.all([
+    env.DB.prepare(`
+      SELECT
+        paragraph_sentences.id AS paragraph_sentence_id,
+        paragraph_sentences.position,
+        sentences.id,
+        sentences.text,
+        sentences.tokens,
+        sentences.translations,
+        sentences.phonemes,
+        sentences.audio,
+        sentences.image
+      FROM paragraph_sentences
+      INNER JOIN sentences ON sentences.id = paragraph_sentences.sentence_id
+      WHERE paragraph_sentences.paragraph_id = ?
+      ORDER BY paragraph_sentences.position ASC
+    `).bind(paragraph.id).all<ParagraphSentenceRow>(),
+    env.DB.prepare(`
+      SELECT
+        mapping.id,
+        mapping.sentence_id,
+        mapping.position,
+        mapping.token_indexes,
+        lexical.id AS lexical_id,
+        lexical.text,
+        lexical.type,
+        lexical.translations,
+        lexical.phonemes,
+        lexical.audio,
+        lexical.image
+      FROM sentence_lexicals mapping
+      JOIN paragraph_sentences owner ON owner.sentence_id = mapping.sentence_id
+      JOIN lexicals lexical ON lexical.id = mapping.lexical_id
+      WHERE owner.paragraph_id = ?
+      ORDER BY mapping.sentence_id, mapping.position, mapping.id
+    `).bind(paragraph.id).all<SentenceLexicalRuntimeRow>(),
+  ]);
+  const lexicalsBySentence = new Map<string, Array<{
+    id: string;
+    position: number;
+    token_indexes: number[];
+    lexical: ReturnType<typeof parseLexical>;
+  }>>();
+  for (const lexical of lexicalRows.results) {
+    const mappings = lexicalsBySentence.get(lexical.sentence_id) ?? [];
+    mappings.push({
+      id: lexical.id,
+      position: lexical.position,
+      token_indexes: parseJson<number[]>(lexical.token_indexes, []),
+      lexical: parseLexical(lexical),
+    });
+    lexicalsBySentence.set(lexical.sentence_id, mappings);
+  }
   return {
     id: paragraph.id,
     passage_id: paragraph.passage_id,
     position: paragraph.position,
     image: paragraph.image,
-    sentences: await Promise.all(rows.results.map(async row => ({
+    sentences: rows.results.map(row => ({
       id: row.paragraph_sentence_id,
       position: row.position,
-      sentence: await getSentenceDetail(env, row),
-    }))),
+      sentence: { ...parseSentence(row), lexicals: lexicalsBySentence.get(row.id) ?? [] },
+    })),
   };
 }
 
 async function getPassageDetail(env: Env, passage: PassageRow) {
-  const [titleSentence, paragraphs, terms, activities] = await Promise.all([
+  const [titleSentence, paragraphs, bodySentences, lexicalRows, terms, activities] = await Promise.all([
     env.DB.prepare('SELECT id, text, tokens, translations, phonemes, audio, image FROM sentences WHERE id = ?')
       .bind(passage.title_sentence_id)
       .first<SentenceRow>(),
     env.DB.prepare('SELECT id, passage_id, position, image FROM paragraphs WHERE passage_id = ? ORDER BY position ASC')
       .bind(passage.id)
       .all<ParagraphRow>(),
+    env.DB.prepare(`
+      SELECT
+        mapping.id AS paragraph_sentence_id,
+        mapping.paragraph_id,
+        mapping.position,
+        sentence.id,
+        sentence.text,
+        sentence.tokens,
+        sentence.translations,
+        sentence.phonemes,
+        sentence.audio,
+        sentence.image
+      FROM paragraph_sentences mapping
+      JOIN paragraphs paragraph ON paragraph.id = mapping.paragraph_id
+      JOIN sentences sentence ON sentence.id = mapping.sentence_id
+      WHERE paragraph.passage_id = ?
+      ORDER BY paragraph.position, mapping.position, mapping.id
+    `).bind(passage.id).all<ParagraphSentenceRow & { paragraph_id: string }>(),
+    env.DB.prepare(`
+      SELECT
+        mapping.id,
+        mapping.sentence_id,
+        mapping.position,
+        mapping.token_indexes,
+        lexical.id AS lexical_id,
+        lexical.text,
+        lexical.type,
+        lexical.translations,
+        lexical.phonemes,
+        lexical.audio,
+        lexical.image
+      FROM sentence_lexicals mapping
+      JOIN sentence_passages owner ON owner.sentence_id = mapping.sentence_id
+      JOIN lexicals lexical ON lexical.id = mapping.lexical_id
+      WHERE owner.passage_id = ?
+      ORDER BY mapping.sentence_id, mapping.position, mapping.id
+    `).bind(passage.id).all<SentenceLexicalRuntimeRow>(),
     env.DB.prepare(`
       SELECT
         term.id,
@@ -337,6 +381,8 @@ async function getPassageDetail(env: Env, passage: PassageRow) {
         taxonomy.id AS taxonomy_id,
         taxonomy.code AS taxonomy_code,
         taxonomy.name AS taxonomy_name,
+        taxonomy.description AS taxonomy_description,
+        taxonomy.translations AS taxonomy_translations,
         taxonomy.selection_mode AS taxonomy_selection_mode
       FROM passage_terms assigned
       JOIN taxonomy_terms term ON term.id = assigned.term_id
@@ -352,13 +398,43 @@ async function getPassageDetail(env: Env, passage: PassageRow) {
     `).bind(passage.id).all<PassageActivityRow>(),
   ]);
   if (!titleSentence) throw new Error('Passage title sentence not found');
+  const lexicalsBySentence = new Map<string, Array<{
+    id: string;
+    position: number;
+    token_indexes: number[];
+    lexical: ReturnType<typeof parseLexical>;
+  }>>();
+  for (const row of lexicalRows.results) {
+    const mappings = lexicalsBySentence.get(row.sentence_id) ?? [];
+    mappings.push({
+      id: row.id,
+      position: row.position,
+      token_indexes: parseJson<number[]>(row.token_indexes, []),
+      lexical: parseLexical(row),
+    });
+    lexicalsBySentence.set(row.sentence_id, mappings);
+  }
+  const sentenceDetail = (sentence: SentenceRow) => ({
+    ...parseSentence(sentence),
+    lexicals: lexicalsBySentence.get(sentence.id) ?? [],
+  });
+  const bodyByParagraph = new Map<string, Array<{
+    id: string;
+    position: number;
+    sentence: ReturnType<typeof sentenceDetail>;
+  }>>();
+  for (const row of bodySentences.results) {
+    const values = bodyByParagraph.get(row.paragraph_id) ?? [];
+    values.push({ id: row.paragraph_sentence_id, position: row.position, sentence: sentenceDetail(row) });
+    bodyByParagraph.set(row.paragraph_id, values);
+  }
   return {
     id: passage.id,
     image: passage.image,
     summary: passage.summary,
     difficulty: passage.difficulty,
     reward_points: passage.reward_points,
-    title: await getSentenceDetail(env, titleSentence),
+    title: sentenceDetail(titleSentence),
     terms: terms.results.map(row => ({
       id: row.id,
       code: row.code,
@@ -370,6 +446,8 @@ async function getPassageDetail(env: Env, passage: PassageRow) {
         id: row.taxonomy_id,
         code: row.taxonomy_code,
         name: row.taxonomy_name,
+        description: row.taxonomy_description,
+        translations: parseJson<unknown>(row.taxonomy_translations, {}),
         selection_mode: row.taxonomy_selection_mode,
       },
     })),
@@ -381,7 +459,13 @@ async function getPassageDetail(env: Env, passage: PassageRow) {
       config: parseJson<unknown>(row.config, {}),
       is_enabled: row.is_enabled === 1,
     })),
-    paragraphs: await Promise.all(paragraphs.results.map(paragraph => getParagraphDetail(env, paragraph))),
+    paragraphs: paragraphs.results.map(paragraph => ({
+      id: paragraph.id,
+      passage_id: paragraph.passage_id,
+      position: paragraph.position,
+      image: paragraph.image,
+      sentences: bodyByParagraph.get(paragraph.id) ?? [],
+    })),
   };
 }
 
@@ -449,12 +533,58 @@ export async function handleListPassages(request: Request, env: Env, origin: str
     const url = new URL(request.url);
     const { page, size, offset } = parsePagination(url);
     const text = url.searchParams.get('text')?.trim().toLowerCase();
-    const where = text ? 'WHERE LOWER(sentences.text) LIKE ?' : '';
-    const params = text ? [`%${text}%`] : [];
+    const status = url.searchParams.get('status');
+    if (status && status !== 'draft' && status !== 'published') {
+      return errorResponse(400, 'VALIDATION_ERROR', 'status phải là draft hoặc published', origin);
+    }
+    const parseDifficulty = (name: string): number | null | Response => {
+      const raw = url.searchParams.get(name);
+      if (raw === null || raw.trim() === '') return null;
+      const value = Number(raw);
+      return Number.isSafeInteger(value)
+        ? value
+        : errorResponse(400, 'VALIDATION_ERROR', `${name} phải là số nguyên`, origin);
+    };
+    const difficultyMin = parseDifficulty('difficulty_min');
+    if (isResponse(difficultyMin)) return difficultyMin;
+    const difficultyMax = parseDifficulty('difficulty_max');
+    if (isResponse(difficultyMax)) return difficultyMax;
+    if (difficultyMin !== null && difficultyMax !== null && difficultyMin > difficultyMax) {
+      return errorResponse(400, 'VALIDATION_ERROR', 'difficulty_min không được lớn hơn difficulty_max', origin);
+    }
+    const termIds = [...new Set(url.searchParams.getAll('term_id').map(value => value.trim()).filter(Boolean))];
+    if (termIds.length > 20) return errorResponse(400, 'VALIDATION_ERROR', 'Chỉ được lọc tối đa 20 term_id', origin);
+    const conditions: string[] = [];
+    const params: Array<string | number> = [];
+    if (text) {
+      conditions.push('(LOWER(sentences.text) LIKE ? OR LOWER(COALESCE(passages.summary, \'\')) LIKE ?)');
+      params.push(`%${text}%`, `%${text}%`);
+    }
+    if (status === 'draft') conditions.push('runtime.passage_id IS NULL');
+    if (status === 'published') conditions.push('runtime.passage_id IS NOT NULL');
+    if (difficultyMin !== null) {
+      conditions.push('passages.difficulty >= ?');
+      params.push(difficultyMin);
+    }
+    if (difficultyMax !== null) {
+      conditions.push('passages.difficulty <= ?');
+      params.push(difficultyMax);
+    }
+    if (termIds.length > 0) {
+      conditions.push(`passages.id IN (
+        SELECT passage_id FROM passage_terms
+        WHERE term_id IN (${termIds.map(() => '?').join(', ')})
+        GROUP BY passage_id
+        HAVING COUNT(DISTINCT term_id) = ?
+      )`);
+      params.push(...termIds, termIds.length);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const count = await env.DB.prepare(`
       SELECT COUNT(*) AS total
       FROM passages
       INNER JOIN sentences ON sentences.id = passages.title_sentence_id
+      LEFT JOIN passages_runtime runtime ON runtime.passage_id = passages.id
       ${where}
     `).bind(...params).first<{ total: number }>();
     const rows = await env.DB.prepare(`
@@ -501,47 +631,30 @@ export async function handleGetPassage(env: Env, origin: string, id: string): Pr
   }
 }
 
-export async function handleCreatePassage(request: Request, env: Env, origin: string): Promise<Response> {
-  const input = await readPassageInput(request, origin);
-  if (isResponse(input)) return input;
-  const id = generateUUIDv7();
-  try {
-    await env.DB.prepare(`
-      INSERT INTO passages (id, title_sentence_id, image, summary, difficulty, reward_points)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(
-      id,
-      input.title_sentence_id,
-      input.image,
-      input.summary,
-      input.difficulty,
-      input.reward_points,
-    ).run();
-    const passage = await getPassage(env, id);
-    return successResponse(201, 'CREATED', passage ? await getPassageDetail(env, passage) : undefined, origin);
-  } catch (error) {
-    if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'title_sentence_id không tồn tại', origin);
-    return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
-  }
-}
-
 export async function handleUpdatePassage(request: Request, env: Env, origin: string, id: string): Promise<Response> {
   const input = await readPassageInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    const result = await env.DB.prepare(`
-      UPDATE passages
-      SET title_sentence_id = ?, image = ?, summary = ?, difficulty = ?, reward_points = ?
-      WHERE id = ?
-    `).bind(
-      input.title_sentence_id,
-      input.image,
-      input.summary,
-      input.difficulty,
-      input.reward_points,
-      id,
-    ).run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const existing = await getPassage(env, id);
+    if (!existing) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    if (input.title_sentence_id !== existing.title_sentence_id) {
+      return errorResponse(409, 'CONFLICT', 'Không thể đổi title_sentence_id; hãy edit title sentence hiện tại', origin);
+    }
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE passages
+        SET title_sentence_id = ?, image = ?, summary = ?, difficulty = ?, reward_points = ?
+        WHERE id = ?
+      `).bind(
+        input.title_sentence_id,
+        input.image,
+        input.summary,
+        input.difficulty,
+        input.reward_points,
+        id,
+      ),
+      ...invalidateRuntimeStatements(env, [id]),
+    ]);
     const passage = await getPassage(env, id);
     return successResponse(200, 'UPDATED', passage ? await getPassageDetail(env, passage) : undefined, origin);
   } catch (error) {
@@ -552,10 +665,24 @@ export async function handleUpdatePassage(request: Request, env: Env, origin: st
 
 export async function handleDeletePassage(env: Env, origin: string, id: string): Promise<Response> {
   try {
-    const result = await env.DB.prepare('DELETE FROM passages WHERE id = ?').bind(id).run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const passage = await getPassage(env, id);
+    if (!passage) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const sentenceRows = await env.DB.prepare(`
+      SELECT sentence_id FROM sentence_passages WHERE passage_id = ?
+    `).bind(id).all<{ sentence_id: string }>();
+    const lexicalRows = await env.DB.prepare(`
+      SELECT lexical_id FROM passage_lexicals WHERE passage_id = ?
+    `).bind(id).all<{ lexical_id: string }>();
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM passages WHERE id = ?').bind(id),
+      ...sentenceRows.results.map(row => env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(row.sentence_id)),
+      ...deleteOrphanLexicalStatements(env, lexicalRows.results.map(row => row.lexical_id)),
+    ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
+    if (isForeignKeyConstraint(error)) {
+      return errorResponse(409, 'CONFLICT', 'Passage đã được dùng trong roadmap hoặc lịch sử học nên không thể xóa', origin);
+    }
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }
@@ -584,6 +711,7 @@ export async function handleCreateParagraph(request: Request, env: Env, origin: 
     await env.DB.batch([
       env.DB.prepare('INSERT INTO paragraphs (id, passage_id, position, image) VALUES (?, ?, -1, ?)').bind(id, passageId, input.image ?? null),
       ...orderStatements(env, 'paragraphs', 'passage_id', passageId, insertAt(ids, id, position)),
+      ...invalidateRuntimeStatements(env, [passageId]),
     ]);
     const paragraph = await getParagraph(env, id);
     return successResponse(201, 'CREATED', paragraph ? await getParagraphDetail(env, paragraph) : undefined, origin);
@@ -613,6 +741,7 @@ export async function handleUpdateParagraph(request: Request, env: Env, origin: 
     if (input.position > ids.length) return errorResponse(400, 'VALIDATION_ERROR', 'position vượt quá số paragraph hiện có', origin);
     const statements = orderStatements(env, 'paragraphs', 'passage_id', paragraph.passage_id, insertAt(ids, id, input.position!));
     if (input.image !== undefined) statements.push(env.DB.prepare('UPDATE paragraphs SET image = ? WHERE id = ?').bind(input.image, id));
+    statements.push(...invalidateRuntimeStatements(env, [paragraph.passage_id]));
     await env.DB.batch(statements);
     const updated = await getParagraph(env, id);
     return successResponse(200, 'UPDATED', updated ? await getParagraphDetail(env, updated) : undefined, origin);
@@ -626,9 +755,21 @@ export async function handleDeleteParagraph(env: Env, origin: string, id: string
     const paragraph = await getParagraph(env, id);
     if (!paragraph) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     const ids = (await paragraphIds(env, paragraph.passage_id)).filter(paragraphId => paragraphId !== id);
+    const sentenceRows = await env.DB.prepare(`
+      SELECT sentence_id FROM paragraph_sentences WHERE paragraph_id = ?
+    `).bind(id).all<{ sentence_id: string }>();
+    const lexicalRows = await env.DB.prepare(`
+      SELECT DISTINCT mapping.lexical_id
+      FROM sentence_lexicals mapping
+      JOIN paragraph_sentences owner ON owner.sentence_id = mapping.sentence_id
+      WHERE owner.paragraph_id = ?
+    `).bind(id).all<{ lexical_id: string }>();
     await env.DB.batch([
       env.DB.prepare('DELETE FROM paragraphs WHERE id = ?').bind(id),
       ...orderStatements(env, 'paragraphs', 'passage_id', paragraph.passage_id, ids),
+      ...sentenceRows.results.map(row => env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(row.sentence_id)),
+      ...deleteOrphanLexicalStatements(env, lexicalRows.results.map(row => row.lexical_id)),
+      ...invalidateRuntimeStatements(env, [paragraph.passage_id]),
     ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
@@ -647,58 +788,51 @@ export async function handleListParagraphSentences(env: Env, origin: string, par
   }
 }
 
-export async function handleCreateParagraphSentence(request: Request, env: Env, origin: string, paragraphId: string): Promise<Response> {
+export async function handleUpdateParagraphSentence(request: Request, env: Env, origin: string, id: string): Promise<Response> {
   const input = await readParagraphSentenceInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    if (!await getParagraph(env, paragraphId)) return errorResponse(404, 'NOT_FOUND', undefined, origin);
-    const ids = await paragraphSentenceIds(env, paragraphId);
-    const position = input.position ?? ids.length;
-    if (position > ids.length) return errorResponse(400, 'VALIDATION_ERROR', 'position vượt quá số câu hiện có', origin);
-    const id = generateUUIDv7();
-    await env.DB.batch([
-      env.DB.prepare('INSERT INTO paragraph_sentences (id, paragraph_id, sentence_id, position) VALUES (?, ?, ?, -1)').bind(id, paragraphId, input.sentence_id),
-      ...orderStatements(env, 'paragraph_sentences', 'paragraph_id', paragraphId, insertAt(ids, id, position)),
-    ]);
-    const paragraph = await getParagraph(env, paragraphId);
-    const detail = paragraph ? await getParagraphDetail(env, paragraph) : null;
-    return successResponse(201, 'CREATED', detail?.sentences.find(sentence => sentence.id === id), origin);
-  } catch (error) {
-    if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'sentence_id không tồn tại', origin);
-    if (isUniqueConstraint(error)) return errorResponse(409, 'CONFLICT', 'position câu đã tồn tại', origin);
-    return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
-  }
-}
-
-export async function handleUpdateParagraphSentence(request: Request, env: Env, origin: string, id: string): Promise<Response> {
-  const input = await readParagraphSentenceInput(request, origin, true);
-  if (isResponse(input) || input.position === undefined) return isResponse(input) ? input : errorResponse(400, 'VALIDATION_ERROR', 'Thiếu position', origin);
-  try {
-    const mapping = await env.DB.prepare('SELECT id, paragraph_id FROM paragraph_sentences WHERE id = ?').bind(id).first<{ id: string; paragraph_id: string }>();
+    const mapping = await env.DB.prepare(`
+      SELECT mapping.id, mapping.paragraph_id, mapping.sentence_id, paragraph.passage_id
+      FROM paragraph_sentences mapping
+      JOIN paragraphs paragraph ON paragraph.id = mapping.paragraph_id
+      WHERE mapping.id = ?
+    `).bind(id).first<{ id: string; paragraph_id: string; sentence_id: string; passage_id: string }>();
     if (!mapping) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     const ids = (await paragraphSentenceIds(env, mapping.paragraph_id)).filter(mappingId => mappingId !== id);
     if (input.position > ids.length) return errorResponse(400, 'VALIDATION_ERROR', 'position vượt quá số câu hiện có', origin);
     await env.DB.batch([
-      env.DB.prepare('UPDATE paragraph_sentences SET sentence_id = ?, position = -1 WHERE id = ?').bind(input.sentence_id, id),
+      env.DB.prepare('UPDATE paragraph_sentences SET position = -1 WHERE id = ?').bind(id),
       ...orderStatements(env, 'paragraph_sentences', 'paragraph_id', mapping.paragraph_id, insertAt(ids, id, input.position!)),
+      ...invalidateRuntimeStatements(env, [mapping.passage_id]),
     ]);
     const paragraph = await getParagraph(env, mapping.paragraph_id);
     const detail = paragraph ? await getParagraphDetail(env, paragraph) : null;
     return successResponse(200, 'UPDATED', detail?.sentences.find(sentence => sentence.id === id), origin);
   } catch (error) {
-    if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'sentence_id không tồn tại', origin);
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }
 
 export async function handleDeleteParagraphSentence(env: Env, origin: string, id: string): Promise<Response> {
   try {
-    const mapping = await env.DB.prepare('SELECT id, paragraph_id FROM paragraph_sentences WHERE id = ?').bind(id).first<{ id: string; paragraph_id: string }>();
+    const mapping = await env.DB.prepare(`
+      SELECT mapping.id, mapping.paragraph_id, mapping.sentence_id, paragraph.passage_id
+      FROM paragraph_sentences mapping
+      JOIN paragraphs paragraph ON paragraph.id = mapping.paragraph_id
+      WHERE mapping.id = ?
+    `).bind(id).first<{ id: string; paragraph_id: string; sentence_id: string; passage_id: string }>();
     if (!mapping) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     const ids = (await paragraphSentenceIds(env, mapping.paragraph_id)).filter(mappingId => mappingId !== id);
+    const lexicalRows = await env.DB.prepare(`
+      SELECT DISTINCT lexical_id FROM sentence_lexicals WHERE sentence_id = ?
+    `).bind(mapping.sentence_id).all<{ lexical_id: string }>();
     await env.DB.batch([
       env.DB.prepare('DELETE FROM paragraph_sentences WHERE id = ?').bind(id),
       ...orderStatements(env, 'paragraph_sentences', 'paragraph_id', mapping.paragraph_id, ids),
+      env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(mapping.sentence_id),
+      ...deleteOrphanLexicalStatements(env, lexicalRows.results.map(row => row.lexical_id)),
+      ...invalidateRuntimeStatements(env, [mapping.passage_id]),
     ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {

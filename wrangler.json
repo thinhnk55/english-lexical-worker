@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"compatibility_date": "2025-04-01",
+	"compatibility_date": "2026-08-27",
 	"main": "src/index.ts",
 	"name": "english-lexical-worker",
 	"upload_source_maps": true,

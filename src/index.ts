@@ -1,20 +1,23 @@
 import { routeAdminRequest } from './routes/admin';
 import { routeUserRequest } from './routes/user';
 import { requireAdmin, requireUser } from './utils/auth';
-import { getOrigin } from './utils/cors';
+import { getCorsOrigin } from './utils/cors';
 import { corsResponse, errorResponse } from './utils/response';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const origin = getOrigin(request);
+    const cors = getCorsOrigin(request);
+    const origin = cors.origin;
+
+    if (!cors.allowed) return errorResponse(403, 'FORBIDDEN', 'Origin không được phép', '');
 
     if (request.method === 'OPTIONS') return corsResponse(origin);
 
     if (url.pathname === '/' || url.pathname === '/info') {
       return new Response(JSON.stringify({
         name: 'english-lexical-worker',
-        version: '1.0.0',
+        version: '2.0.0',
         api: {
           admin: '/v1/admin',
           user: '/v1',

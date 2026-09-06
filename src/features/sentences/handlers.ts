@@ -3,6 +3,16 @@ import { parsePagination } from '../../utils/pagination';
 import { generateUUIDv7 } from '../../utils/uuid';
 import type { Sentence, SentenceLexical, SentenceLexicalRow, SentenceRow } from './types';
 import { parseOptionalMediaUrl } from '../../utils/media';
+import {
+  deleteOrphanLexicalStatements,
+  getSentenceAuthoringContext,
+  invalidateRuntimeStatements,
+  parseStoredTokenIndexes,
+  passageIdsForSentence,
+  validateTokenIndexes,
+} from '../authoring/context';
+
+const TEMPORARY_POSITION_OFFSET = 1_000_000;
 
 interface SentenceInput {
   text: string;
@@ -15,8 +25,8 @@ interface SentenceInput {
 
 interface SentenceLexicalInput {
   lexical_id: string;
-  position: number | null;
-  token_indexes: string | null;
+  position: number;
+  token_indexes: number[];
 }
 
 function parseJson<T>(value: string | null, fallback: T): T {
@@ -52,6 +62,7 @@ function parseSentence(row: SentenceRow): Sentence {
 function parseSentenceLexical(row: SentenceLexicalRow): SentenceLexical {
   return {
     ...row,
+    token_indexes: parseStoredTokenIndexes(row.token_indexes),
   };
 }
 
@@ -100,7 +111,11 @@ async function readSentenceInput(request: Request, origin: string): Promise<Sent
   };
 }
 
-async function readSentenceLexicalInput(request: Request, origin: string): Promise<SentenceLexicalInput | Response> {
+async function readSentenceLexicalInput(
+  request: Request,
+  origin: string,
+  tokenCount: number,
+): Promise<SentenceLexicalInput | Response> {
   let body: unknown;
   try {
     body = await request.json();
@@ -112,15 +127,13 @@ async function readSentenceLexicalInput(request: Request, origin: string): Promi
   }
   const value = body as Record<string, unknown>;
   const lexicalId = typeof value.lexical_id === 'string' ? value.lexical_id.trim() : '';
-  const tokenIndexes = value.token_indexes === null || value.token_indexes === undefined
-    ? null
-    : typeof value.token_indexes === 'string' ? value.token_indexes : undefined;
-  const position = value.position === null || value.position === undefined
-    ? null
-    : typeof value.position === 'number' && Number.isInteger(value.position) && value.position >= 0 ? value.position : -1;
+  const tokenIndexes = validateTokenIndexes(value.token_indexes, tokenCount);
+  const position = typeof value.position === 'number' && Number.isSafeInteger(value.position) && value.position >= 0
+    ? value.position
+    : -1;
   if (!lexicalId) return errorResponse(400, 'VALIDATION_ERROR', 'Thiếu lexical_id', origin);
-  if (tokenIndexes === undefined) return errorResponse(400, 'VALIDATION_ERROR', 'token_indexes phải là chuỗi hoặc null', origin);
-  if (position === -1) return errorResponse(400, 'VALIDATION_ERROR', 'position phải là số nguyên không âm hoặc null', origin);
+  if (typeof tokenIndexes === 'string') return errorResponse(400, 'VALIDATION_ERROR', tokenIndexes, origin);
+  if (position === -1) return errorResponse(400, 'VALIDATION_ERROR', 'position phải là số nguyên không âm', origin);
   return { lexical_id: lexicalId, position, token_indexes: tokenIndexes };
 }
 
@@ -149,28 +162,120 @@ export async function handleGetSentence(env: Env, origin: string, id: string): P
   }
 }
 
-export async function handleCreateSentence(request: Request, env: Env, origin: string): Promise<Response> {
+export async function handleCreatePassageParagraphSentence(
+  request: Request,
+  env: Env,
+  origin: string,
+  passageId: string,
+  paragraphId: string,
+): Promise<Response> {
+  let raw: unknown;
+  try {
+    raw = await request.clone().json();
+  } catch {
+    return errorResponse(400, 'BAD_REQUEST', 'Định dạng JSON không hợp lệ', origin);
+  }
+  const requestedPosition = typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>).position
+    : undefined;
+  if (requestedPosition !== undefined && (!Number.isSafeInteger(requestedPosition) || (requestedPosition as number) < 0)) {
+    return errorResponse(400, 'VALIDATION_ERROR', 'position phải là số nguyên không âm', origin);
+  }
   const input = await readSentenceInput(request, origin);
   if (isResponse(input)) return input;
-  const id = generateUUIDv7();
   try {
-    await env.DB.prepare('INSERT INTO sentences (id, text, tokens, translations, phonemes, audio, image) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, input.text, JSON.stringify(input.tokens), input.translations ? JSON.stringify(input.translations) : null, input.phonemes, input.audio, input.image)
-      .run();
-    return successResponse(201, 'CREATED', { id, ...input }, origin);
+    const paragraph = await env.DB.prepare(`
+      SELECT id FROM paragraphs WHERE id = ? AND passage_id = ?
+    `).bind(paragraphId, passageId).first<{ id: string }>();
+    if (!paragraph) return errorResponse(404, 'NOT_FOUND', 'Paragraph không thuộc passage này', origin);
+    const rows = await env.DB.prepare(`
+      SELECT id FROM paragraph_sentences WHERE paragraph_id = ? ORDER BY position, id
+    `).bind(paragraphId).all<{ id: string }>();
+    const position = requestedPosition === undefined ? rows.results.length : requestedPosition as number;
+    if (position > rows.results.length) {
+      return errorResponse(400, 'VALIDATION_ERROR', 'position vượt quá số sentence hiện có', origin);
+    }
+    const sentenceId = generateUUIDv7();
+    const mappingId = generateUUIDv7();
+    const orderedIds = [
+      ...rows.results.slice(0, position).map(row => row.id),
+      mappingId,
+      ...rows.results.slice(position).map(row => row.id),
+    ];
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO sentences (id, text, tokens, translations, phonemes, audio, image)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        sentenceId,
+        input.text,
+        JSON.stringify(input.tokens),
+        input.translations ? JSON.stringify(input.translations) : null,
+        input.phonemes,
+        input.audio,
+        input.image,
+      ),
+      env.DB.prepare(`
+        UPDATE paragraph_sentences SET position = position + ${TEMPORARY_POSITION_OFFSET}
+        WHERE paragraph_id = ?
+      `).bind(paragraphId),
+      env.DB.prepare(`
+        INSERT INTO paragraph_sentences (id, paragraph_id, sentence_id, position)
+        VALUES (?, ?, ?, ${TEMPORARY_POSITION_OFFSET - 1})
+      `).bind(mappingId, paragraphId, sentenceId),
+      ...orderedIds.map((id, finalPosition) => (
+        env.DB.prepare('UPDATE paragraph_sentences SET position = ? WHERE id = ?').bind(finalPosition, id)
+      )),
+      ...invalidateRuntimeStatements(env, [passageId]),
+    ]);
+    return successResponse(201, 'CREATED', {
+      id: mappingId,
+      position,
+      sentence: { id: sentenceId, ...input, lexicals: [] },
+      runtime_invalidated: true,
+    }, origin);
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }
 
 export async function handleUpdateSentence(request: Request, env: Env, origin: string, id: string): Promise<Response> {
+  let options: unknown;
+  try {
+    options = await request.clone().json();
+  } catch {
+    return errorResponse(400, 'BAD_REQUEST', 'Định dạng JSON không hợp lệ', origin);
+  }
+  const dropInvalidMappings = typeof options === 'object'
+    && options !== null
+    && !Array.isArray(options)
+    && (options as Record<string, unknown>).drop_invalid_mappings === true;
   const input = await readSentenceInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    const result = await env.DB.prepare('UPDATE sentences SET text = ?, tokens = ?, translations = ?, phonemes = ?, audio = ?, image = ? WHERE id = ?')
-      .bind(input.text, JSON.stringify(input.tokens), input.translations ? JSON.stringify(input.translations) : null, input.phonemes, input.audio, input.image, id)
-      .run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const passageIds = await passageIdsForSentence(env, id);
+    const existing = await env.DB.prepare('SELECT id FROM sentences WHERE id = ?').bind(id).first<{ id: string }>();
+    if (!existing) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const mappings = await env.DB.prepare(`
+      SELECT id, lexical_id, token_indexes FROM sentence_lexicals WHERE sentence_id = ?
+    `).bind(id).all<{ id: string; lexical_id: string; token_indexes: string }>();
+    const invalidMappings = mappings.results
+      .filter(mapping => parseStoredTokenIndexes(mapping.token_indexes).some(index => index >= input.tokens.length));
+    const invalidMappingIds = invalidMappings.map(mapping => mapping.id);
+    if (invalidMappingIds.length > 0 && !dropInvalidMappings) {
+      return errorResponse(409, 'CONFLICT', {
+        reason: 'TOKEN_MAPPINGS_OUT_OF_RANGE',
+        mapping_ids: invalidMappingIds,
+        message: 'Hãy sửa mapping trước hoặc gửi drop_invalid_mappings=true để xóa mapping không còn hợp lệ.',
+      }, origin);
+    }
+    await env.DB.batch([
+      env.DB.prepare('UPDATE sentences SET text = ?, tokens = ?, translations = ?, phonemes = ?, audio = ?, image = ? WHERE id = ?')
+        .bind(input.text, JSON.stringify(input.tokens), input.translations ? JSON.stringify(input.translations) : null, input.phonemes, input.audio, input.image, id),
+      ...invalidMappingIds.map(mappingId => env.DB.prepare('DELETE FROM sentence_lexicals WHERE id = ?').bind(mappingId)),
+      ...deleteOrphanLexicalStatements(env, invalidMappings.map(mapping => mapping.lexical_id)),
+      ...invalidateRuntimeStatements(env, passageIds),
+    ]);
     return successResponse(200, 'UPDATED', { id, ...input }, origin);
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
@@ -179,8 +284,15 @@ export async function handleUpdateSentence(request: Request, env: Env, origin: s
 
 export async function handleDeleteSentence(env: Env, origin: string, id: string): Promise<Response> {
   try {
-    const result = await env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(id).run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const existing = await env.DB.prepare('SELECT id FROM sentences WHERE id = ?').bind(id).first<{ id: string }>();
+    if (!existing) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const lexicalRows = await env.DB.prepare(`
+      SELECT DISTINCT lexical_id FROM sentence_lexicals WHERE sentence_id = ?
+    `).bind(id).all<{ lexical_id: string }>();
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(id),
+      ...deleteOrphanLexicalStatements(env, lexicalRows.results.map(row => row.lexical_id)),
+    ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
     if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'Không thể xóa sentence đang được lexical hoặc paragraph sử dụng', origin);
@@ -190,6 +302,8 @@ export async function handleDeleteSentence(env: Env, origin: string, id: string)
 
 export async function handleListSentenceLexicals(env: Env, origin: string, sentenceId: string): Promise<Response> {
   try {
+    const sentence = await env.DB.prepare('SELECT id FROM sentences WHERE id = ?').bind(sentenceId).first<{ id: string }>();
+    if (!sentence) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     const rows = await env.DB.prepare('SELECT * FROM sentence_lexicals WHERE sentence_id = ? ORDER BY position ASC, id ASC').bind(sentenceId).all<SentenceLexicalRow>();
     return successResponse(200, 'SUCCESS', rows.results.map(parseSentenceLexical), origin);
   } catch (error) {
@@ -197,30 +311,26 @@ export async function handleListSentenceLexicals(env: Env, origin: string, sente
   }
 }
 
-export async function handleCreateSentenceLexical(request: Request, env: Env, origin: string, sentenceId: string): Promise<Response> {
-  const input = await readSentenceLexicalInput(request, origin);
-  if (isResponse(input)) return input;
-  const id = generateUUIDv7();
-  try {
-    await env.DB.prepare('INSERT INTO sentence_lexicals (id, sentence_id, lexical_id, position, token_indexes) VALUES (?, ?, ?, ?, ?)')
-      .bind(id, sentenceId, input.lexical_id, input.position, input.token_indexes)
-      .run();
-    return successResponse(201, 'CREATED', { id, sentence_id: sentenceId, ...input }, origin);
-  } catch (error) {
-    if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'sentence_id hoặc lexical_id không tồn tại', origin);
-    return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
-  }
-}
-
 export async function handleUpdateSentenceLexical(request: Request, env: Env, origin: string, id: string): Promise<Response> {
-  const existing = await env.DB.prepare('SELECT sentence_id FROM sentence_lexicals WHERE id = ?').bind(id).first<{ sentence_id: string }>();
+  const existing = await env.DB.prepare('SELECT sentence_id, lexical_id FROM sentence_lexicals WHERE id = ?').bind(id).first<{ sentence_id: string; lexical_id: string }>();
   if (!existing) return errorResponse(404, 'NOT_FOUND', undefined, origin);
-  const input = await readSentenceLexicalInput(request, origin);
+  const context = await getSentenceAuthoringContext(env, existing.sentence_id);
+  if (!context) return errorResponse(409, 'CONFLICT', 'Sentence mapping không thuộc passage nào', origin);
+  const input = await readSentenceLexicalInput(request, origin, context.tokens.length);
   if (isResponse(input)) return input;
   try {
-    await env.DB.prepare('UPDATE sentence_lexicals SET lexical_id = ?, position = ?, token_indexes = ? WHERE id = ?')
-      .bind(input.lexical_id, input.position, input.token_indexes, id)
-      .run();
+    const lexicalInPassage = await env.DB.prepare(`
+      SELECT 1 FROM passage_lexicals WHERE passage_id = ? AND lexical_id = ?
+    `).bind(context.passageId, input.lexical_id).first<{ 1: number }>();
+    if (!lexicalInPassage) {
+      return errorResponse(409, 'CONFLICT', 'Chỉ được map lexical đã thuộc passage này', origin);
+    }
+    await env.DB.batch([
+      env.DB.prepare('UPDATE sentence_lexicals SET lexical_id = ?, position = ?, token_indexes = ? WHERE id = ?')
+        .bind(input.lexical_id, input.position, JSON.stringify(input.token_indexes), id),
+      ...deleteOrphanLexicalStatements(env, [existing.lexical_id]),
+      ...invalidateRuntimeStatements(env, [context.passageId]),
+    ]);
     return successResponse(200, 'UPDATED', { id, sentence_id: existing.sentence_id, ...input }, origin);
   } catch (error) {
     if (isForeignKeyConstraint(error)) return errorResponse(409, 'CONFLICT', 'sentence_id hoặc lexical_id không tồn tại', origin);
@@ -230,8 +340,14 @@ export async function handleUpdateSentenceLexical(request: Request, env: Env, or
 
 export async function handleDeleteSentenceLexical(env: Env, origin: string, id: string): Promise<Response> {
   try {
-    const result = await env.DB.prepare('DELETE FROM sentence_lexicals WHERE id = ?').bind(id).run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const mapping = await env.DB.prepare('SELECT sentence_id, lexical_id FROM sentence_lexicals WHERE id = ?').bind(id).first<{ sentence_id: string; lexical_id: string }>();
+    if (!mapping) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const passageIds = await passageIdsForSentence(env, mapping.sentence_id);
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM sentence_lexicals WHERE id = ?').bind(id),
+      ...deleteOrphanLexicalStatements(env, [mapping.lexical_id]),
+      ...invalidateRuntimeStatements(env, passageIds),
+    ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);

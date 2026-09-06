@@ -54,56 +54,6 @@ CREATE TABLE IF NOT EXISTS learner_activity_progress (
 CREATE INDEX IF NOT EXISTS idx_learner_activity_progress_activity
   ON learner_activity_progress(passage_activity_id, status);
 
-CREATE TRIGGER IF NOT EXISTS trg_learner_activity_progress_same_passage_insert
-BEFORE INSERT ON learner_activity_progress
-WHEN (
-  SELECT passage_id FROM learner_passages WHERE id = NEW.learner_passage_id
-) IS NOT (
-  SELECT passage_id FROM passage_activities WHERE id = NEW.passage_activity_id
-)
-BEGIN
-  SELECT RAISE(ABORT, 'activity and learner passage must reference the same passage');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_learner_activity_progress_same_passage_update
-BEFORE UPDATE OF learner_passage_id, passage_activity_id ON learner_activity_progress
-WHEN (
-  SELECT passage_id FROM learner_passages WHERE id = NEW.learner_passage_id
-) IS NOT (
-  SELECT passage_id FROM passage_activities WHERE id = NEW.passage_activity_id
-)
-BEGIN
-  SELECT RAISE(ABORT, 'activity and learner passage must reference the same passage');
-END;
-
--- Every learner passage starts active; completion is always a later action.
-CREATE TRIGGER IF NOT EXISTS trg_learner_passages_insert_active_only
-BEFORE INSERT ON learner_passages
-WHEN NEW.completed_at IS NOT NULL
-BEGIN
-  SELECT RAISE(ABORT, 'learner passage must be inserted as active');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_learner_passages_identity_immutable
-BEFORE UPDATE OF user_id, passage_id, mode, roadmap_passage_id ON learner_passages
-WHEN NEW.user_id IS NOT OLD.user_id
-  OR NEW.passage_id IS NOT OLD.passage_id
-  OR NEW.mode IS NOT OLD.mode
-  OR NEW.roadmap_passage_id IS NOT OLD.roadmap_passage_id
-BEGIN
-  SELECT RAISE(ABORT, 'learner passage identity is immutable');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_learner_passages_completed_immutable
-BEFORE UPDATE ON learner_passages
-WHEN OLD.completed_at IS NOT NULL
-BEGIN
-  SELECT RAISE(ABORT, 'completed learner passage is immutable');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_learner_passages_completed_not_deletable
-BEFORE DELETE ON learner_passages
-WHEN OLD.completed_at IS NOT NULL
-BEGIN
-  SELECT RAISE(ABORT, 'completed learner passage cannot be deleted');
-END;
+-- The public API only inserts active rows, only updates the current active row,
+-- validates that activities belong to it, and only deletes unfinished rows.
+-- These lifecycle rules intentionally live in visible handler queries.

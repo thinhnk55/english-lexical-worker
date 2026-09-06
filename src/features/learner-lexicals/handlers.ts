@@ -1,5 +1,6 @@
 import { parsePagination } from '../../utils/pagination';
 import { errorResponse, successResponse } from '../../utils/response';
+import { deleteOrphanLexicalStatements } from '../authoring/context';
 
 const DEFAULT_REVIEW_LIMIT = 20;
 const MAX_REVIEW_LIMIT = 50;
@@ -322,11 +323,17 @@ export async function handleDeleteLearnerLexical(
   lexicalId: string,
 ): Promise<Response> {
   try {
-    const result = await env.DB.prepare(`
-      DELETE FROM learner_lexicals
-      WHERE user_id = ? AND lexical_id = ?
-    `).bind(userId, lexicalId).run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const saved = await env.DB.prepare(`
+      SELECT 1 AS found FROM learner_lexicals WHERE user_id = ? AND lexical_id = ?
+    `).bind(userId, lexicalId).first<{ found: number }>();
+    if (!saved) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    await env.DB.batch([
+      env.DB.prepare(`
+        DELETE FROM learner_lexicals
+        WHERE user_id = ? AND lexical_id = ?
+      `).bind(userId, lexicalId),
+      ...deleteOrphanLexicalStatements(env, [lexicalId]),
+    ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);

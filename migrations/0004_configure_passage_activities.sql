@@ -11,16 +11,12 @@ CREATE TABLE IF NOT EXISTS passage_activities (
   is_enabled INTEGER NOT NULL DEFAULT 1 CHECK (is_enabled IN (0, 1)),
   FOREIGN KEY (passage_id) REFERENCES passages(id) ON DELETE CASCADE,
   UNIQUE (passage_id, position),
+  UNIQUE (passage_id, code),
   UNIQUE (id, passage_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_passage_activities_passage
   ON passage_activities(passage_id, position);
 
--- Moving an activity to another passage would invalidate learner results.
-CREATE TRIGGER IF NOT EXISTS trg_passage_activities_passage_immutable
-BEFORE UPDATE OF passage_id ON passage_activities
-WHEN NEW.passage_id IS NOT OLD.passage_id
-BEGIN
-  SELECT RAISE(ABORT, 'passage activity cannot move to another passage');
-END;
+-- The API never exposes passage_id as an updatable activity field. Reordering
+-- and editing are performed within the owning passage in one D1 batch.

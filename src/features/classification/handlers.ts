@@ -1,6 +1,7 @@
 import { parsePagination } from '../../utils/pagination';
 import { errorResponse, successResponse } from '../../utils/response';
 import { generateUUIDv7 } from '../../utils/uuid';
+import { invalidateRuntimeStatements } from '../authoring/context';
 
 type JsonObject = Record<string, unknown>;
 
@@ -176,6 +177,32 @@ async function getTerm(env: Env, id: string): Promise<TaxonomyTermRow | null> {
   `).bind(id).first<TaxonomyTermRow>();
 }
 
+async function passageIdsForTaxonomy(env: Env, taxonomyId: string): Promise<string[]> {
+  const rows = await env.DB.prepare(`
+    SELECT DISTINCT assigned.passage_id
+    FROM passage_terms assigned
+    JOIN taxonomy_terms term ON term.id = assigned.term_id
+    WHERE term.taxonomy_id = ?
+  `).bind(taxonomyId).all<{ passage_id: string }>();
+  return rows.results.map(row => row.passage_id);
+}
+
+async function passageIdsForTerm(env: Env, termId: string): Promise<string[]> {
+  const rows = await env.DB.prepare(`
+    WITH RECURSIVE descendants(id) AS (
+      SELECT id FROM taxonomy_terms WHERE id = ?
+      UNION ALL
+      SELECT child.id
+      FROM taxonomy_terms child
+      JOIN descendants parent ON child.parent_id = parent.id
+    )
+    SELECT DISTINCT passage_id
+    FROM passage_terms
+    WHERE term_id IN (SELECT id FROM descendants)
+  `).bind(termId).all<{ passage_id: string }>();
+  return rows.results.map(row => row.passage_id);
+}
+
 async function getPassageTerms(env: Env, passageId: string): Promise<Array<ReturnType<typeof parseTerm> & { taxonomy: ReturnType<typeof parseTaxonomy> }>> {
   const rows = await env.DB.prepare(`
     SELECT
@@ -282,12 +309,30 @@ export async function handleUpdateTaxonomy(request: Request, env: Env, origin: s
   const input = await readTaxonomyInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    const result = await env.DB.prepare(`
-      UPDATE taxonomies
-      SET code = ?, name = ?, description = ?, translations = ?, selection_mode = ?
-      WHERE id = ?
-    `).bind(input.code, input.name, input.description, JSON.stringify(input.translations), input.selection_mode, id).run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    if (!await getTaxonomy(env, id)) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    if (input.selection_mode === 'single') {
+      const conflict = await env.DB.prepare(`
+        SELECT assigned.passage_id
+        FROM passage_terms assigned
+        JOIN taxonomy_terms term ON term.id = assigned.term_id
+        WHERE term.taxonomy_id = ?
+        GROUP BY assigned.passage_id
+        HAVING COUNT(*) > 1
+        LIMIT 1
+      `).bind(id).first<{ passage_id: string }>();
+      if (conflict) {
+        return errorResponse(409, 'CONFLICT', `Passage ${conflict.passage_id} đang có nhiều term; chưa thể đổi taxonomy sang single`, origin);
+      }
+    }
+    const passageIds = await passageIdsForTaxonomy(env, id);
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE taxonomies
+        SET code = ?, name = ?, description = ?, translations = ?, selection_mode = ?
+        WHERE id = ?
+      `).bind(input.code, input.name, input.description, JSON.stringify(input.translations), input.selection_mode, id),
+      ...invalidateRuntimeStatements(env, passageIds),
+    ]);
     const taxonomy = await getTaxonomy(env, id);
     return successResponse(200, 'UPDATED', taxonomy ? parseTaxonomy(taxonomy) : undefined, origin);
   } catch (error) {
@@ -298,8 +343,12 @@ export async function handleUpdateTaxonomy(request: Request, env: Env, origin: s
 
 export async function handleDeleteTaxonomy(env: Env, origin: string, id: string): Promise<Response> {
   try {
-    const result = await env.DB.prepare('DELETE FROM taxonomies WHERE id = ?').bind(id).run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    if (!await getTaxonomy(env, id)) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const passageIds = await passageIdsForTaxonomy(env, id);
+    await env.DB.batch([
+      ...invalidateRuntimeStatements(env, passageIds),
+      env.DB.prepare('DELETE FROM taxonomies WHERE id = ?').bind(id),
+    ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
@@ -337,20 +386,40 @@ export async function handleUpdateTaxonomyTerm(request: Request, env: Env, origi
   const input = await readTermInput(request, origin);
   if (isResponse(input)) return input;
   try {
-    const result = await env.DB.prepare(`
-      UPDATE taxonomy_terms
-      SET parent_id = ?, code = ?, name = ?, description = ?, translations = ?, position = ?
-      WHERE id = ?
-    `).bind(
-      input.parent_id,
-      input.code,
-      input.name,
-      input.description,
-      JSON.stringify(input.translations),
-      input.position,
-      id,
-    ).run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const existing = await getTerm(env, id);
+    if (!existing) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    if (input.parent_id) {
+      const invalidParent = await env.DB.prepare(`
+        WITH RECURSIVE descendants(id) AS (
+          SELECT id FROM taxonomy_terms WHERE id = ?
+          UNION ALL
+          SELECT child.id
+          FROM taxonomy_terms child
+          JOIN descendants parent ON child.parent_id = parent.id
+        )
+        SELECT id FROM descendants WHERE id = ?
+      `).bind(id, input.parent_id).first<{ id: string }>();
+      if (invalidParent) {
+        return errorResponse(409, 'CONFLICT', 'parent_id không thể là chính term hoặc một term con của nó', origin);
+      }
+    }
+    const passageIds = await passageIdsForTerm(env, id);
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE taxonomy_terms
+        SET parent_id = ?, code = ?, name = ?, description = ?, translations = ?, position = ?
+        WHERE id = ?
+      `).bind(
+        input.parent_id,
+        input.code,
+        input.name,
+        input.description,
+        JSON.stringify(input.translations),
+        input.position,
+        id,
+      ),
+      ...invalidateRuntimeStatements(env, passageIds),
+    ]);
     const term = await getTerm(env, id);
     return successResponse(200, 'UPDATED', term ? parseTerm(term) : undefined, origin);
   } catch (error) {
@@ -361,8 +430,12 @@ export async function handleUpdateTaxonomyTerm(request: Request, env: Env, origi
 
 export async function handleDeleteTaxonomyTerm(env: Env, origin: string, id: string): Promise<Response> {
   try {
-    const result = await env.DB.prepare('DELETE FROM taxonomy_terms WHERE id = ?').bind(id).run();
-    if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    if (!await getTerm(env, id)) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const passageIds = await passageIdsForTerm(env, id);
+    await env.DB.batch([
+      ...invalidateRuntimeStatements(env, passageIds),
+      env.DB.prepare('DELETE FROM taxonomy_terms WHERE id = ?').bind(id),
+    ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
@@ -415,6 +488,7 @@ export async function handleReplacePassageTerms(request: Request, env: Env, orig
     await env.DB.batch([
       env.DB.prepare('DELETE FROM passage_terms WHERE passage_id = ?').bind(passageId),
       ...termIds.map(termId => env.DB.prepare('INSERT INTO passage_terms (passage_id, term_id) VALUES (?, ?)').bind(passageId, termId)),
+      ...invalidateRuntimeStatements(env, [passageId]),
     ]);
     return successResponse(200, 'UPDATED', await getPassageTerms(env, passageId), origin);
   } catch (error) {

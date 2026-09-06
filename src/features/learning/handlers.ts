@@ -30,6 +30,8 @@ interface TermRow {
   taxonomy_id: string;
   taxonomy_code: string;
   taxonomy_name: string;
+  taxonomy_description: string | null;
+  taxonomy_translations: string;
 }
 
 interface LearnerPassageRow {
@@ -288,7 +290,9 @@ export async function handleListPublishedPassages(request: Request, env: Env, or
           term.translations,
           taxonomy.id AS taxonomy_id,
           taxonomy.code AS taxonomy_code,
-          taxonomy.name AS taxonomy_name
+          taxonomy.name AS taxonomy_name,
+          taxonomy.description AS taxonomy_description,
+          taxonomy.translations AS taxonomy_translations
         FROM passage_terms assigned
         JOIN taxonomy_terms term ON term.id = assigned.term_id
         JOIN taxonomies taxonomy ON taxonomy.id = term.taxonomy_id
@@ -310,7 +314,13 @@ export async function handleListPublishedPassages(request: Request, env: Env, or
         name: term.name,
         description: term.description,
         translations: parseJson(term.translations, {}),
-        taxonomy: { id: term.taxonomy_id, code: term.taxonomy_code, name: term.taxonomy_name },
+        taxonomy: {
+          id: term.taxonomy_id,
+          code: term.taxonomy_code,
+          name: term.taxonomy_name,
+          description: term.taxonomy_description,
+          translations: parseJson(term.taxonomy_translations, {}),
+        },
       })),
     })), origin, { page, size, total: count?.total ?? 0 });
   } catch (error) {
@@ -679,7 +689,7 @@ export async function handleGetReadingHistoryItem(env: Env, origin: string, user
 export async function handleGetReadingSummary(env: Env, origin: string, userId: string): Promise<Response> {
   try {
     const profile = await ensureProfile(env, userId);
-    const [reading, activities, recent] = await Promise.all([
+    const [reading, activities, recent, lexicalReview] = await Promise.all([
       env.DB.prepare(`
         SELECT
           COUNT(*) AS completed_passages,
@@ -725,12 +735,35 @@ export async function handleGetReadingSummary(env: Env, origin: string, userId: 
         completed_at: number;
         reward_points_awarded: number;
       }>(),
+      env.DB.prepare(`
+        SELECT
+          COUNT(*) AS saved_lexicals,
+          COUNT(last_reviewed_at) AS reviewed_lexicals,
+          AVG(meaning_score) AS average_meaning_score,
+          AVG(pronunciation_score) AS average_pronunciation_score,
+          AVG(review_score) AS average_review_score
+        FROM learner_lexicals
+        WHERE user_id = ?
+      `).bind(userId).first<{
+        saved_lexicals: number;
+        reviewed_lexicals: number;
+        average_meaning_score: number | null;
+        average_pronunciation_score: number | null;
+        average_review_score: number | null;
+      }>(),
     ]);
     return successResponse(200, 'SUCCESS', {
       profile,
       completed_passages: reading?.completed_passages ?? 0,
       passage_points: reading?.passage_points ?? 0,
       activity_results: activities.results,
+      lexical_review: lexicalReview ?? {
+        saved_lexicals: 0,
+        reviewed_lexicals: 0,
+        average_meaning_score: null,
+        average_pronunciation_score: null,
+        average_review_score: null,
+      },
       recent_completions: recent.results,
     }, origin);
   } catch (error) {
@@ -755,22 +788,22 @@ export async function handleCheckIn(env: Env, origin: string, userId: string): P
         longest_streak,
         last_checkin_date,
         updated_at
-      ) VALUES (?, 1, 1, date('now'), unixepoch())
+      ) VALUES (?, 1, 1, date('now', '+7 hours'), unixepoch())
       ON CONFLICT(user_id) DO UPDATE SET
         current_streak = CASE
-          WHEN learner_profiles.last_checkin_date = date('now') THEN learner_profiles.current_streak
-          WHEN learner_profiles.last_checkin_date = date('now', '-1 day') THEN learner_profiles.current_streak + 1
+          WHEN learner_profiles.last_checkin_date = date('now', '+7 hours') THEN learner_profiles.current_streak
+          WHEN learner_profiles.last_checkin_date = date('now', '+7 hours', '-1 day') THEN learner_profiles.current_streak + 1
           ELSE 1
         END,
         longest_streak = MAX(
           learner_profiles.longest_streak,
           CASE
-            WHEN learner_profiles.last_checkin_date = date('now') THEN learner_profiles.current_streak
-            WHEN learner_profiles.last_checkin_date = date('now', '-1 day') THEN learner_profiles.current_streak + 1
+            WHEN learner_profiles.last_checkin_date = date('now', '+7 hours') THEN learner_profiles.current_streak
+            WHEN learner_profiles.last_checkin_date = date('now', '+7 hours', '-1 day') THEN learner_profiles.current_streak + 1
             ELSE 1
           END
         ),
-        last_checkin_date = date('now'),
+        last_checkin_date = date('now', '+7 hours'),
         updated_at = unixepoch()
     `).bind(userId).run();
     return successResponse(200, 'UPDATED', await ensureProfile(env, userId), origin);

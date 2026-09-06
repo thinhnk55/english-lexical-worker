@@ -1,6 +1,6 @@
 {
   "name": "english-lexical-worker",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Lexical resources API on Cloudflare Workers",
   "private": true,
   "devDependencies": {
@@ -9,7 +9,7 @@
     "wrangler": "^4.37.0"
   },
   "scripts": {
-    "cf-typegen": "wrangler types",
+    "cf-typegen": "wrangler types src/env.d.ts --include-runtime false --strict-vars false",
     "check": "tsc && wrangler deploy --dry-run",
     "test": "node --experimental-strip-types --experimental-default-type=module --test tests/*.test.mjs",
     "deploy": "wrangler deploy",

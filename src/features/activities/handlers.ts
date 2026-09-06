@@ -1,5 +1,6 @@
 import { errorResponse, successResponse } from '../../utils/response';
 import { generateUUIDv7 } from '../../utils/uuid';
+import { invalidateRuntimeStatements } from '../authoring/context';
 
 const TEMPORARY_POSITION_OFFSET = 1_000_000;
 
@@ -23,6 +24,10 @@ interface ActivityInput {
 
 function isResponse(value: unknown): value is Response {
   return value instanceof Response;
+}
+
+function isConstraint(error: unknown): boolean {
+  return error instanceof Error && /constraint|unique|foreign key/i.test(error.message);
 }
 
 function parseConfig(value: string): unknown {
@@ -155,10 +160,12 @@ export async function handleCreatePassageActivity(request: Request, env: Env, or
       ...insertAt(ids, id, position).map((activityId, finalPosition) => (
         env.DB.prepare('UPDATE passage_activities SET position = ? WHERE id = ?').bind(finalPosition, activityId)
       )),
+      ...invalidateRuntimeStatements(env, [passageId]),
     ]);
     const activity = await getActivity(env, id);
     return successResponse(201, 'CREATED', activity ? parseActivity(activity) : undefined, origin);
   } catch (error) {
+    if (isConstraint(error)) return errorResponse(409, 'CONFLICT', 'Activity code hoặc position đã tồn tại trong passage', origin);
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }
@@ -197,10 +204,12 @@ export async function handleUpdatePassageActivity(request: Request, env: Env, or
       ...insertAt(ids, id, input.position).map((activityId, finalPosition) => (
         env.DB.prepare('UPDATE passage_activities SET position = ? WHERE id = ?').bind(finalPosition, activityId)
       )),
+      ...invalidateRuntimeStatements(env, [activity.passage_id]),
     ]);
     const updated = await getActivity(env, id);
     return successResponse(200, 'UPDATED', updated ? parseActivity(updated) : undefined, origin);
   } catch (error) {
+    if (isConstraint(error)) return errorResponse(409, 'CONFLICT', 'Activity code hoặc position đã tồn tại trong passage', origin);
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }
@@ -213,6 +222,7 @@ export async function handleDeletePassageActivity(env: Env, origin: string, id: 
     await env.DB.batch([
       env.DB.prepare('DELETE FROM passage_activities WHERE id = ?').bind(id),
       ...orderStatements(env, activity.passage_id, ids),
+      ...invalidateRuntimeStatements(env, [activity.passage_id]),
     ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {

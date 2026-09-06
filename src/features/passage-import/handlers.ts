@@ -2,6 +2,8 @@ import { parseOptionalMediaUrl } from '../../utils/media';
 import { errorResponse, successResponse } from '../../utils/response';
 import { generateUUIDv7 } from '../../utils/uuid';
 import { isLexicalType, type LexicalType } from '../lexicals/constants';
+import { deleteOrphanLexicalStatements, validateTokenIndexes } from '../authoring/context';
+import { passageDraftFromText } from './draft';
 
 const MAX_JSON_BYTES = 1_500_000;
 const MAX_PARAGRAPHS = 50;
@@ -30,7 +32,7 @@ interface ImportSentence {
   phonemes: string | null;
   audio: string | null;
   image: string | null;
-  lexicals: Array<ImportLexical & { position: number; token_indexes: string | null }>;
+  lexicals: Array<ImportLexical & { mapping_id: string; position: number; token_indexes: number[] }>;
 }
 
 interface ImportParagraph {
@@ -78,7 +80,11 @@ interface ExistingLookup {
   passageExists: boolean;
   sentenceIds: Set<string>;
   lexicalIds: Set<string>;
-  lexicalByKey: Map<string, string>;
+  sentencePassages: Map<string, string>;
+  lexicalPassages: Map<string, Set<string>>;
+  paragraphPassages: Map<string, string>;
+  activityPassages: Map<string, string>;
+  lexicalMappingSentences: Map<string, string>;
   termIds: Set<string>;
 }
 
@@ -107,10 +113,6 @@ function translations(value: unknown): Record<string, string> | null {
     result[locale] = translation.trim();
   }
   return result;
-}
-
-function normalizedKey(value: string, type: string): string {
-  return `${value.trim().toLocaleLowerCase()}::${type.trim().toLocaleLowerCase()}`;
 }
 
 function readMedia(value: unknown, field: 'audio' | 'image', origin: string): string | null | Response {
@@ -184,11 +186,16 @@ function readSentence(raw: unknown, origin: string, warnings: string[], lexicalL
     if (isResponse(lexical)) return lexical;
     const position = rawLexical?.position === undefined ? index : rawLexical.position;
     if (!Number.isSafeInteger(position) || (position as number) < 0) return errorResponse(400, 'VALIDATION_ERROR', 'lexical.position phải là số nguyên không âm', origin);
-    const tokenIndexes = rawLexical?.token_indexes;
-    if (tokenIndexes !== undefined && tokenIndexes !== null && typeof tokenIndexes !== 'string') {
-      return errorResponse(400, 'VALIDATION_ERROR', 'lexical.token_indexes phải là chuỗi hoặc null', origin);
+    const tokenIndexes = validateTokenIndexes(rawLexical?.token_indexes, tokens.length);
+    if (typeof tokenIndexes === 'string') {
+      return errorResponse(400, 'VALIDATION_ERROR', `lexical.token_indexes: ${tokenIndexes}`, origin);
     }
-    lexicals.push({ ...lexical, position: position as number, token_indexes: tokenIndexes === undefined ? null : tokenIndexes as string | null });
+    lexicals.push({
+      ...lexical,
+      mapping_id: text(rawLexical?.mapping_id) ?? generateUUIDv7(),
+      position: position as number,
+      token_indexes: tokenIndexes,
+    });
   }
   return {
     id: text(value.id) ?? generateUUIDv7(),
@@ -244,14 +251,24 @@ function readActivities(raw: unknown, origin: string): ImportActivity[] | Respon
 }
 
 async function readImport(request: Request, origin: string): Promise<NormalizedImport | Response> {
+  const contentLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BYTES) {
+    return errorResponse(413, 'VALIDATION_ERROR', 'Payload import vượt quá 1.5 MB', origin);
+  }
   let rawBody: unknown;
   try { rawBody = await request.json(); } catch { return errorResponse(400, 'BAD_REQUEST', 'Định dạng JSON không hợp lệ', origin); }
   const body = objectValue(rawBody);
   if (!body) return errorResponse(400, 'VALIDATION_ERROR', 'Payload import phải là JSON object', origin);
-  if (JSON.stringify(rawBody).length > MAX_JSON_BYTES) return errorResponse(413, 'VALIDATION_ERROR', 'Payload import vượt quá 1.5 MB', origin);
-  const rawPassage = objectValue(body.passage);
-  if (!rawPassage) return errorResponse(400, 'VALIDATION_ERROR', 'Payload cần passage object', origin);
+  if (new TextEncoder().encode(JSON.stringify(rawBody)).byteLength > MAX_JSON_BYTES) {
+    return errorResponse(413, 'VALIDATION_ERROR', 'Payload import vượt quá 1.5 MB', origin);
+  }
   const warnings: string[] = [];
+  let rawPassage = objectValue(body.passage);
+  if (!rawPassage && typeof body.content === 'string') {
+    rawPassage = passageDraftFromText(body.content);
+    if (rawPassage) warnings.push('Backend đã tạo draft: dòng đầu là title, dòng trống tách paragraph và dấu câu tách sentence.');
+  }
+  if (!rawPassage) return errorResponse(400, 'VALIDATION_ERROR', 'Payload cần passage object hoặc content', origin);
   const lexicalLimit = { value: 0 };
   const rawTitle = rawPassage.title ?? rawPassage.title_sentence;
   const title = readSentence(rawTitle, origin, warnings, lexicalLimit);
@@ -291,8 +308,8 @@ async function readImport(request: Request, origin: string): Promise<NormalizedI
   if (isResponse(terms)) return terms;
   const activities = readActivities(rawPassage.activities, origin);
   if (isResponse(activities)) return activities;
-  const replaceParagraphs = rawPassage.replace_paragraphs === true;
-  const replaceActivities = rawPassage.replace_activities === true;
+  const replaceParagraphs = rawPassage.replace_paragraphs !== false;
+  const replaceActivities = rawPassage.replace_activities !== false;
   const sentenceIds = [title.id, ...paragraphs.flatMap(paragraph => paragraph.sentences.map(sentence => sentence.id))];
   if (new Set(sentenceIds).size !== sentenceIds.length) return errorResponse(400, 'VALIDATION_ERROR', 'Các sentence id trong payload bị trùng', origin);
   const paragraphIds = paragraphs.map(paragraph => paragraph.id);
@@ -300,7 +317,22 @@ async function readImport(request: Request, origin: string): Promise<NormalizedI
   if (new Set(paragraphs.map(paragraph => paragraph.position)).size !== paragraphs.length) return errorResponse(400, 'VALIDATION_ERROR', 'Các paragraph position trong payload bị trùng', origin);
   const activityIds = activities.map(activity => activity.id);
   if (new Set(activityIds).size !== activityIds.length) return errorResponse(400, 'VALIDATION_ERROR', 'Các activity id trong payload bị trùng', origin);
+  if (new Set(activities.map(activity => activity.code)).size !== activities.length) return errorResponse(400, 'VALIDATION_ERROR', 'Các activity code trong payload bị trùng', origin);
   if (new Set(activities.map(activity => activity.position)).size !== activities.length) return errorResponse(400, 'VALIDATION_ERROR', 'Các activity position trong payload bị trùng', origin);
+  const lexicalIdsBySurface = new Map<string, Set<string>>();
+  for (const sentence of [title, ...paragraphs.flatMap(paragraph => paragraph.sentences)]) {
+    for (const lexical of sentence.lexicals) {
+      const key = `${lexical.text.toLocaleLowerCase()}::${lexical.type}`;
+      const ids = lexicalIdsBySurface.get(key) ?? new Set<string>();
+      ids.add(lexical.id);
+      lexicalIdsBySurface.set(key, ids);
+    }
+  }
+  for (const [surface, ids] of lexicalIdsBySurface) {
+    if (ids.size > 1) {
+      warnings.push(`Lexical ${surface} có ${ids.size} ID trong passage; giữ nguyên để admin quyết định nghĩa ngữ cảnh.`);
+    }
+  }
   return {
     passage: {
       id: text(rawPassage.id) ?? generateUUIDv7(),
@@ -323,72 +355,79 @@ function allSentences(imported: ImportPassage): ImportSentence[] {
   return [imported.title, ...imported.paragraphs.flatMap(paragraph => paragraph.sentences)];
 }
 
-function canonicalizeLexicals(imported: ImportPassage): void {
-  const canonicalByKey = new Map<string, string>();
-  for (const sentence of allSentences(imported)) {
-    for (const lexical of sentence.lexicals) {
-      const key = normalizedKey(lexical.text, lexical.type);
-      const canonicalId = canonicalByKey.get(key);
-      if (canonicalId) lexical.id = canonicalId;
-      else canonicalByKey.set(key, lexical.id);
-    }
-  }
-}
-
 function allLexicals(imported: ImportPassage): ImportLexical[] {
-  const byKey = new Map<string, ImportLexical>();
+  const byId = new Map<string, ImportLexical>();
   for (const sentence of allSentences(imported)) {
     for (const lexical of sentence.lexicals) {
-      const key = normalizedKey(lexical.text, lexical.type);
-      if (!byKey.has(key)) byKey.set(key, lexical);
+      if (!byId.has(lexical.id)) byId.set(lexical.id, lexical);
     }
   }
-  return [...byKey.values()];
+  return [...byId.values()];
 }
 
 async function lookupExisting(env: Env, imported: ImportPassage): Promise<ExistingLookup> {
   const sentenceIds = allSentences(imported).map(sentence => sentence.id);
   const lexicalList = allLexicals(imported);
   const termIds = imported.terms.flatMap(term => term.term_id ? [term.term_id] : []);
-  const sentenceRows: Array<{ id: string }> = [];
+  const sentenceRows: Array<{ id: string; passage_id: string | null }> = [];
   for (const ids of chunks(sentenceIds, 90)) {
     if (ids.length === 0) continue;
-    const rows = await env.DB.prepare(`SELECT id FROM sentences WHERE id IN (${ids.map(() => '?').join(', ')})`).bind(...ids).all<{ id: string }>();
+    const rows = await env.DB.prepare(`
+      SELECT sentence.id, owner.passage_id
+      FROM sentences sentence
+      LEFT JOIN sentence_passages owner ON owner.sentence_id = sentence.id
+      WHERE sentence.id IN (${ids.map(() => '?').join(', ')})
+    `).bind(...ids).all<{ id: string; passage_id: string | null }>();
     sentenceRows.push(...rows.results);
   }
   const lexicalIds = lexicalList.map(lexical => lexical.id);
-  const lexicalRows: Array<{ id: string }> = [];
+  const lexicalRows: Array<{ id: string; passage_id: string | null }> = [];
   for (const ids of chunks(lexicalIds, 90)) {
     if (ids.length === 0) continue;
-    const rows = await env.DB.prepare(`SELECT id FROM lexicals WHERE id IN (${ids.map(() => '?').join(', ')})`).bind(...ids).all<{ id: string }>();
+    const rows = await env.DB.prepare(`
+      SELECT lexical.id, owner.passage_id
+      FROM lexicals lexical
+      LEFT JOIN passage_lexicals owner ON owner.lexical_id = lexical.id
+      WHERE lexical.id IN (${ids.map(() => '?').join(', ')})
+    `).bind(...ids).all<{ id: string; passage_id: string | null }>();
     lexicalRows.push(...rows.results);
   }
-  const lexicalByKey = new Map<string, string>();
-  for (const lexicalChunk of chunks(lexicalList, 40)) {
-    if (lexicalChunk.length === 0) continue;
-    const clauses = lexicalChunk.map(() => '(LOWER(TRIM(text)) = ? AND type = ?)').join(' OR ');
-    const params = lexicalChunk.flatMap(lexical => [lexical.text.toLocaleLowerCase(), lexical.type]);
-    const rows = await env.DB.prepare(`SELECT id, text, type FROM lexicals WHERE ${clauses}`).bind(...params).all<{ id: string; text: string; type: string }>();
-    for (const row of rows.results) lexicalByKey.set(normalizedKey(row.text, row.type), row.id);
-  }
   const termRows = termIds.length === 0 ? [] : (await env.DB.prepare(`SELECT id FROM taxonomy_terms WHERE id IN (${termIds.map(() => '?').join(', ')})`).bind(...termIds).all<{ id: string }>()).results;
+  const paragraphIds = imported.paragraphs.map(paragraph => paragraph.id);
+  const paragraphRows = paragraphIds.length === 0 ? [] : (await env.DB.prepare(`
+    SELECT id, passage_id FROM paragraphs WHERE id IN (${paragraphIds.map(() => '?').join(', ')})
+  `).bind(...paragraphIds).all<{ id: string; passage_id: string }>()).results;
+  const activityIds = imported.activities.map(activity => activity.id);
+  const activityRows = activityIds.length === 0 ? [] : (await env.DB.prepare(`
+    SELECT id, passage_id FROM passage_activities WHERE id IN (${activityIds.map(() => '?').join(', ')})
+  `).bind(...activityIds).all<{ id: string; passage_id: string }>()).results;
+  const mappingIds = allSentences(imported).flatMap(sentence => sentence.lexicals.map(lexical => lexical.mapping_id));
+  const mappingRows: Array<{ id: string; sentence_id: string }> = [];
+  for (const ids of chunks(mappingIds, 90)) {
+    if (ids.length === 0) continue;
+    const rows = await env.DB.prepare(`
+      SELECT id, sentence_id FROM sentence_lexicals WHERE id IN (${ids.map(() => '?').join(', ')})
+    `).bind(...ids).all<{ id: string; sentence_id: string }>();
+    mappingRows.push(...rows.results);
+  }
   const passage = await env.DB.prepare('SELECT id FROM passages WHERE id = ?').bind(imported.id).first<{ id: string }>();
   return {
     passageExists: Boolean(passage),
     sentenceIds: new Set(sentenceRows.map(row => row.id)),
     lexicalIds: new Set(lexicalRows.map(row => row.id)),
-    lexicalByKey,
+    sentencePassages: new Map(sentenceRows.flatMap(row => row.passage_id ? [[row.id, row.passage_id]] : [])),
+    lexicalPassages: lexicalRows.reduce((map, row) => {
+      if (!row.passage_id) return map;
+      const passageIds = map.get(row.id) ?? new Set<string>();
+      passageIds.add(row.passage_id);
+      map.set(row.id, passageIds);
+      return map;
+    }, new Map<string, Set<string>>()),
+    paragraphPassages: new Map(paragraphRows.map(row => [row.id, row.passage_id])),
+    activityPassages: new Map(activityRows.map(row => [row.id, row.passage_id])),
+    lexicalMappingSentences: new Map(mappingRows.map(row => [row.id, row.sentence_id])),
     termIds: new Set(termRows.map(row => row.id)),
   };
-}
-
-function resolveLexicalIds(imported: ImportPassage, lookup: ExistingLookup): void {
-  for (const sentence of allSentences(imported)) {
-    for (const lexical of sentence.lexicals) {
-      const existing = lookup.lexicalByKey.get(normalizedKey(lexical.text, lexical.type));
-      if (existing && existing !== lexical.id) lexical.id = existing;
-    }
-  }
 }
 
 function validateReferences(imported: ImportPassage, lookup: ExistingLookup, strategy: 'create' | 'upsert'): string[] {
@@ -396,14 +435,51 @@ function validateReferences(imported: ImportPassage, lookup: ExistingLookup, str
   if (strategy === 'create' && lookup.passageExists) errors.push(`passage ${imported.id} đã tồn tại; dùng strategy upsert hoặc bỏ id`);
   for (const sentence of allSentences(imported)) {
     if (strategy === 'create' && lookup.sentenceIds.has(sentence.id)) errors.push(`sentence ${sentence.id} đã tồn tại`);
+    const owner = lookup.sentencePassages.get(sentence.id);
+    if (owner && owner !== imported.id) errors.push(`sentence ${sentence.id} đang thuộc passage ${owner}`);
   }
-  const lexicalIdKeys = new Map<string, string>();
+  for (const paragraph of imported.paragraphs) {
+    const owner = lookup.paragraphPassages.get(paragraph.id);
+    if (owner && owner !== imported.id) errors.push(`paragraph ${paragraph.id} đang thuộc passage ${owner}`);
+  }
+  for (const activity of imported.activities) {
+    const owner = lookup.activityPassages.get(activity.id);
+    if (owner && owner !== imported.id) errors.push(`activity ${activity.id} đang thuộc passage ${owner}`);
+  }
+  const seenMappingIds = new Set<string>();
+  for (const sentence of allSentences(imported)) {
+    for (const lexical of sentence.lexicals) {
+      if (seenMappingIds.has(lexical.mapping_id)) errors.push(`mapping_id ${lexical.mapping_id} bị lặp`);
+      seenMappingIds.add(lexical.mapping_id);
+      const owner = lookup.lexicalMappingSentences.get(lexical.mapping_id);
+      if (owner && owner !== sentence.id) errors.push(`mapping_id ${lexical.mapping_id} đang thuộc sentence ${owner}`);
+      if (strategy === 'create' && owner) errors.push(`mapping_id ${lexical.mapping_id} đã tồn tại`);
+    }
+  }
+  const lexicalFingerprints = new Map<string, string>();
+  for (const sentence of allSentences(imported)) {
+    for (const lexical of sentence.lexicals) {
+      const fingerprint = JSON.stringify({
+        text: lexical.text,
+        type: lexical.type,
+        translations: lexical.translations,
+        phonemes: lexical.phonemes,
+        audio: lexical.audio,
+        image: lexical.image,
+      });
+      const previous = lexicalFingerprints.get(lexical.id);
+      if (previous && previous !== fingerprint) {
+        errors.push(`lexical id ${lexical.id} có dữ liệu khác nhau giữa các mapping`);
+      }
+      lexicalFingerprints.set(lexical.id, fingerprint);
+    }
+  }
   for (const lexical of allLexicals(imported)) {
-    const key = normalizedKey(lexical.text, lexical.type);
-    const previousKey = lexicalIdKeys.get(lexical.id);
-    if (previousKey && previousKey !== key) errors.push(`lexical id ${lexical.id} được dùng cho nhiều text/type khác nhau`);
-    lexicalIdKeys.set(lexical.id, key);
-    if (strategy === 'create' && lookup.lexicalIds.has(lexical.id) && !lookup.lexicalByKey.has(normalizedKey(lexical.text, lexical.type))) errors.push(`lexical ${lexical.id} đã tồn tại`);
+    if (strategy === 'create' && lookup.lexicalIds.has(lexical.id)) errors.push(`lexical ${lexical.id} đã tồn tại`);
+    const otherOwners = [...(lookup.lexicalPassages.get(lexical.id) ?? [])].filter(id => id !== imported.id);
+    if (otherOwners.length > 0) {
+      errors.push(`lexical ${lexical.id} đang thuộc passage khác: ${otherOwners.join(', ')}`);
+    }
   }
   for (const term of imported.terms) {
     if (term.term_id && !lookup.termIds.has(term.term_id)) errors.push(`term ${term.term_id} không tồn tại`);
@@ -434,9 +510,35 @@ async function resolveTermCodes(env: Env, imported: ImportPassage): Promise<Map<
   return map;
 }
 
+async function validateTermSelection(
+  env: Env,
+  imported: ImportPassage,
+  termCodeIds: Map<string, string>,
+): Promise<string[]> {
+  const resolved = imported.terms
+    .map(ref => resolveTermId(ref, termCodeIds))
+    .filter((id): id is string => Boolean(id));
+  if (resolved.length === 0) return [];
+  if (new Set(resolved).size !== resolved.length) return ['Cùng một taxonomy term được tham chiếu nhiều lần'];
+  const rows = await env.DB.prepare(`
+    SELECT term.id, term.taxonomy_id, taxonomy.selection_mode
+    FROM taxonomy_terms term
+    JOIN taxonomies taxonomy ON taxonomy.id = term.taxonomy_id
+    WHERE term.id IN (${resolved.map(() => '?').join(', ')})
+  `).bind(...resolved).all<{ id: string; taxonomy_id: string; selection_mode: 'single' | 'multiple' }>();
+  const singleTaxonomies = new Set<string>();
+  const errors: string[] = [];
+  for (const row of rows.results) {
+    if (row.selection_mode !== 'single') continue;
+    if (singleTaxonomies.has(row.taxonomy_id)) {
+      errors.push(`Taxonomy ${row.taxonomy_id} chỉ cho phép một term`);
+    }
+    singleTaxonomies.add(row.taxonomy_id);
+  }
+  return errors;
+}
+
 function plan(imported: ImportPassage, lookup: ExistingLookup, strategy: 'create' | 'upsert', termCodeIds: Map<string, string>) {
-  canonicalizeLexicals(imported);
-  resolveLexicalIds(imported, lookup);
   const errors = validateReferences(imported, lookup, strategy);
   for (const term of imported.terms) {
     if (!term.term_id && !resolveTermId(term, termCodeIds)) errors.push(`term ${term.taxonomy_code}::${term.code} không tồn tại`);
@@ -473,7 +575,7 @@ function plan(imported: ImportPassage, lookup: ExistingLookup, strategy: 'create
     actions: {
       passage: lookup.passageExists ? 'update' : 'create',
       sentences: sentences.filter(sentence => lookup.sentenceIds.has(sentence.id)).length,
-      lexicals: lexicals.filter(lexical => lookup.lexicalIds.has(lexical.id) || lookup.lexicalByKey.has(normalizedKey(lexical.text, lexical.type))).length,
+      lexicals: lexicals.filter(lexical => lookup.lexicalIds.has(lexical.id)).length,
     },
     estimated_statements: estimatedStatements,
   };
@@ -505,11 +607,23 @@ function pushBulkInsert(
 async function importTransaction(env: Env, imported: ImportPassage, termCodeIds: Map<string, string>, strategy: 'create' | 'upsert'): Promise<void> {
   const sentences = allSentences(imported);
   const lexicals = allLexicals(imported);
+  const [previousSentenceRows, previousLexicalRows] = strategy === 'upsert'
+    ? await Promise.all([
+      env.DB.prepare(`
+        SELECT sentence_id FROM sentence_passages WHERE passage_id = ?
+      `).bind(imported.id).all<{ sentence_id: string }>(),
+      env.DB.prepare(`
+        SELECT lexical_id FROM passage_lexicals WHERE passage_id = ?
+      `).bind(imported.id).all<{ lexical_id: string }>(),
+    ])
+    : [{ results: [] as Array<{ sentence_id: string }> }, { results: [] as Array<{ lexical_id: string }> }];
+  const previousSentences = previousSentenceRows.results.map(row => row.sentence_id);
+  const previousLexicalIds = previousLexicalRows.results.map(row => row.lexical_id);
   const resolvedTerms = imported.terms.map(ref => resolveTermId(ref, termCodeIds)).filter((id): id is string => Boolean(id));
   const statements: D1PreparedStatement[] = [];
   pushBulkInsert(env, statements, 'lexicals', 'id, text, type, translations, phonemes, audio, image', lexicals.map(lexical => [lexical.id, lexical.text, lexical.type, JSON.stringify(lexical.translations), lexical.phonemes, lexical.audio, lexical.image]), strategy === 'upsert'
     ? 'ON CONFLICT(id) DO UPDATE SET text = excluded.text, type = excluded.type, translations = excluded.translations, phonemes = excluded.phonemes, audio = excluded.audio, image = excluded.image'
-    : 'ON CONFLICT(id) DO NOTHING');
+    : '');
   pushBulkInsert(env, statements, 'sentences', 'id, text, tokens, translations, phonemes, audio, image', sentences.map(sentence => [sentence.id, sentence.text, JSON.stringify(sentence.tokens), sentence.translations ? JSON.stringify(sentence.translations) : null, sentence.phonemes, sentence.audio, sentence.image]), strategy === 'upsert'
     ? 'ON CONFLICT(id) DO UPDATE SET text = excluded.text, tokens = excluded.tokens, translations = excluded.translations, phonemes = excluded.phonemes, audio = excluded.audio, image = excluded.image'
     : '');
@@ -521,22 +635,40 @@ async function importTransaction(env: Env, imported: ImportPassage, termCodeIds:
   statements.push(env.DB.prepare(passageSql).bind(imported.id, imported.title.id, imported.image, imported.summary, imported.difficulty, imported.reward_points));
   statements.push(env.DB.prepare('DELETE FROM passage_terms WHERE passage_id = ?').bind(imported.id));
   pushBulkInsert(env, statements, 'passage_terms', 'passage_id, term_id', resolvedTerms.map(termId => [imported.id, termId]), '');
-  if (imported.replace_paragraphs) statements.push(env.DB.prepare('DELETE FROM paragraphs WHERE passage_id = ?').bind(imported.id));
-  else statements.push(env.DB.prepare(`UPDATE paragraphs SET position = position + ${POSITION_OFFSET} WHERE passage_id = ?`).bind(imported.id));
+  statements.push(env.DB.prepare(`UPDATE paragraphs SET position = position + ${POSITION_OFFSET} WHERE passage_id = ?`).bind(imported.id));
   pushBulkInsert(env, statements, 'paragraphs', 'id, passage_id, position, image', imported.paragraphs.map(paragraph => [paragraph.id, imported.id, paragraph.position, paragraph.image]), 'ON CONFLICT(id) DO UPDATE SET passage_id = excluded.passage_id, position = excluded.position, image = excluded.image');
+  if (imported.replace_paragraphs) {
+    const ids = imported.paragraphs.map(paragraph => paragraph.id);
+    statements.push(ids.length === 0
+      ? env.DB.prepare('DELETE FROM paragraphs WHERE passage_id = ?').bind(imported.id)
+      : env.DB.prepare(`DELETE FROM paragraphs WHERE passage_id = ? AND id NOT IN (${ids.map(() => '?').join(', ')})`).bind(imported.id, ...ids));
+  }
   for (const paragraph of imported.paragraphs) {
     statements.push(env.DB.prepare('DELETE FROM paragraph_sentences WHERE paragraph_id = ?').bind(paragraph.id));
   }
   pushBulkInsert(env, statements, 'paragraph_sentences', 'id, paragraph_id, sentence_id, position', imported.paragraphs.flatMap(paragraph => paragraph.sentences.map((sentence, position) => [generateUUIDv7(), paragraph.id, sentence.id, position])), '');
   if (!imported.replace_paragraphs) statements.push(env.DB.prepare(`UPDATE paragraphs SET position = position - ${POSITION_OFFSET} WHERE passage_id = ? AND position >= ${POSITION_OFFSET}`).bind(imported.id));
-  if (imported.replace_activities) statements.push(env.DB.prepare('DELETE FROM passage_activities WHERE passage_id = ?').bind(imported.id));
-  else statements.push(env.DB.prepare(`UPDATE passage_activities SET position = position + ${POSITION_OFFSET} WHERE passage_id = ?`).bind(imported.id));
+  const incomingSentenceIds = new Set(sentences.map(sentence => sentence.id));
+  const staleSentenceIds = previousSentences.filter(sentenceId => !incomingSentenceIds.has(sentenceId));
+  if (imported.replace_paragraphs) {
+    for (const ids of chunks(staleSentenceIds, 90)) {
+      statements.push(env.DB.prepare(`DELETE FROM sentences WHERE id IN (${ids.map(() => '?').join(', ')})`).bind(...ids));
+    }
+  }
+  statements.push(env.DB.prepare(`UPDATE passage_activities SET position = position + ${POSITION_OFFSET} WHERE passage_id = ?`).bind(imported.id));
   pushBulkInsert(env, statements, 'passage_activities', 'id, passage_id, code, name, position, config, is_enabled', imported.activities.map(activity => [activity.id, imported.id, activity.code, activity.name, activity.position, JSON.stringify(activity.config), activity.is_enabled ? 1 : 0]), 'ON CONFLICT(id) DO UPDATE SET code = excluded.code, name = excluded.name, position = excluded.position, config = excluded.config, is_enabled = excluded.is_enabled');
+  if (imported.replace_activities) {
+    const ids = imported.activities.map(activity => activity.id);
+    statements.push(ids.length === 0
+      ? env.DB.prepare('DELETE FROM passage_activities WHERE passage_id = ?').bind(imported.id)
+      : env.DB.prepare(`DELETE FROM passage_activities WHERE passage_id = ? AND id NOT IN (${ids.map(() => '?').join(', ')})`).bind(imported.id, ...ids));
+  }
   if (!imported.replace_activities) statements.push(env.DB.prepare(`UPDATE passage_activities SET position = position - ${POSITION_OFFSET} WHERE passage_id = ? AND position >= ${POSITION_OFFSET}`).bind(imported.id));
   for (const sentence of sentences) {
     statements.push(env.DB.prepare('DELETE FROM sentence_lexicals WHERE sentence_id = ?').bind(sentence.id));
   }
-  pushBulkInsert(env, statements, 'sentence_lexicals', 'id, sentence_id, lexical_id, position, token_indexes', sentences.flatMap(sentence => sentence.lexicals.map(lexical => [generateUUIDv7(), sentence.id, lexical.id, lexical.position, lexical.token_indexes])), '');
+  pushBulkInsert(env, statements, 'sentence_lexicals', 'id, sentence_id, lexical_id, position, token_indexes', sentences.flatMap(sentence => sentence.lexicals.map(lexical => [lexical.mapping_id, sentence.id, lexical.id, lexical.position, JSON.stringify(lexical.token_indexes)])), '');
+  statements.push(...deleteOrphanLexicalStatements(env, previousLexicalIds));
   // Source edits invalidate the snapshot. Admin must explicitly publish again.
   statements.push(env.DB.prepare('DELETE FROM passages_runtime WHERE passage_id = ?').bind(imported.id));
   if (statements.length > MAX_BATCH_STATEMENTS) throw new Error(`Import quá lớn: cần ${statements.length} statements, tối đa ${MAX_BATCH_STATEMENTS}`);
@@ -550,6 +682,7 @@ export async function handlePreviewPassageImport(request: Request, env: Env, ori
     const strategy = new URL(request.url).searchParams.get('strategy') === 'create' ? 'create' : 'upsert';
     const [lookup, termCodeIds] = await Promise.all([lookupExisting(env, parsed.passage), resolveTermCodes(env, parsed.passage)]);
     const result = plan(parsed.passage, lookup, strategy, termCodeIds);
+    result.errors.push(...await validateTermSelection(env, parsed.passage, termCodeIds));
     return successResponse(result.errors.length ? 422 : 200, result.errors.length ? 'VALIDATION_ERROR' : 'SUCCESS', {
       strategy,
       ready: result.errors.length === 0,
@@ -569,9 +702,10 @@ export async function handleCommitPassageImport(request: Request, env: Env, orig
     const strategy = new URL(request.url).searchParams.get('strategy') === 'create' ? 'create' : 'upsert';
     const [lookup, termCodeIds] = await Promise.all([lookupExisting(env, parsed.passage), resolveTermCodes(env, parsed.passage)]);
     const result = plan(parsed.passage, lookup, strategy, termCodeIds);
+    result.errors.push(...await validateTermSelection(env, parsed.passage, termCodeIds));
     if (result.errors.length > 0) return errorResponse(422, 'VALIDATION_ERROR', { errors: result.errors, warnings: parsed.warnings, plan: result }, origin);
     await importTransaction(env, parsed.passage, termCodeIds, strategy);
-    return successResponse(201, 'CREATED', {
+    return successResponse(lookup.passageExists ? 200 : 201, lookup.passageExists ? 'UPDATED' : 'CREATED', {
       passage_id: parsed.passage.id,
       strategy,
       runtime_invalidated: true,
@@ -580,6 +714,9 @@ export async function handleCommitPassageImport(request: Request, env: Env, orig
     }, origin);
   } catch (error) {
     if (isConstraint(error)) return errorResponse(409, 'CONFLICT', error instanceof Error ? error.message : undefined, origin);
-    return errorResponse(413, 'VALIDATION_ERROR', error instanceof Error ? error.message : undefined, origin);
+    if (error instanceof Error && /Import quá lớn/.test(error.message)) {
+      return errorResponse(413, 'VALIDATION_ERROR', error.message, origin);
+    }
+    return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
 }

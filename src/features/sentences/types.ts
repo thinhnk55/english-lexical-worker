@@ -12,8 +12,8 @@ export interface SentenceLexicalRow {
   id: string;
   sentence_id: string;
   lexical_id: string;
-  position: number | null;
-  token_indexes: string | null;
+  position: number;
+  token_indexes: string;
 }
 
 export interface Sentence {
@@ -30,6 +30,6 @@ export interface SentenceLexical {
   id: string;
   sentence_id: string;
   lexical_id: string;
-  position: number | null;
-  token_indexes: string | null;
+  position: number;
+  token_indexes: number[];
 }

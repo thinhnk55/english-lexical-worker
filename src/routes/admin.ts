@@ -18,28 +18,29 @@ import {
   handleUpdateTaxonomyTerm,
 } from '../features/classification/handlers';
 import {
-  handleBulkLexicals,
-  handleCheckLexicalDuplicates,
-  handleCreateLexical,
   handleDeleteLexical,
   handleGetLexical,
   handleListLexicals,
   handleUpdateLexical,
 } from '../features/lexicals/handlers';
 import {
+  handleCreatePassageSentenceLexical,
+  handleListPassageLexicalCandidates,
+  handleReusePassageSentenceLexical,
+} from '../features/authoring/handlers';
+import {
   handleCommitPassageImport,
   handlePreviewPassageImport,
 } from '../features/passage-import/handlers';
 import {
   handleCreateParagraph,
-  handleCreateParagraphSentence,
-  handleCreatePassage,
   handleDeleteParagraph,
   handleDeleteParagraphSentence,
   handleDeletePassage,
   handleDeletePassageRuntime,
   handleGetParagraph,
   handleGetPassage,
+  handleGetPassageRuntime,
   handleListParagraphSentences,
   handleListPassageParagraphs,
   handleListPassages,
@@ -62,8 +63,7 @@ import {
   handleUpdateRoadmapPassage,
 } from '../features/roadmaps/handlers';
 import {
-  handleCreateSentence,
-  handleCreateSentenceLexical,
+  handleCreatePassageParagraphSentence,
   handleDeleteSentence,
   handleDeleteSentenceLexical,
   handleGetSentence,
@@ -81,16 +81,8 @@ function methodNotAllowed(origin: string): Response {
 export async function routeAdminRequest(request: Request, env: Env, origin: string, pathname: string): Promise<Response> {
   const path = pathname.slice('/v1/admin'.length) || '/';
 
-  if (path === '/lexicals/check-duplicates') {
-    return request.method === 'POST' ? handleCheckLexicalDuplicates(request, env, origin) : methodNotAllowed(origin);
-  }
-  if (path === '/lexicals/bulk') {
-    return request.method === 'POST' ? handleBulkLexicals(request, env, origin) : methodNotAllowed(origin);
-  }
   if (path === '/lexicals') {
-    if (request.method === 'GET') return handleListLexicals(request, env, origin);
-    if (request.method === 'POST') return handleCreateLexical(request, env, origin);
-    return methodNotAllowed(origin);
+    return request.method === 'GET' ? handleListLexicals(request, env, origin) : methodNotAllowed(origin);
   }
   const lexicalMatch = path.match(/^\/lexicals\/([^/]+)$/);
   if (lexicalMatch) {
@@ -101,15 +93,13 @@ export async function routeAdminRequest(request: Request, env: Env, origin: stri
   }
 
   if (path === '/sentences') {
-    if (request.method === 'GET') return handleListSentences(request, env, origin);
-    if (request.method === 'POST') return handleCreateSentence(request, env, origin);
-    return methodNotAllowed(origin);
+    return request.method === 'GET' ? handleListSentences(request, env, origin) : methodNotAllowed(origin);
   }
   const sentenceLexicalsMatch = path.match(/^\/sentences\/([^/]+)\/lexicals$/);
   if (sentenceLexicalsMatch) {
-    if (request.method === 'GET') return handleListSentenceLexicals(env, origin, sentenceLexicalsMatch[1]);
-    if (request.method === 'POST') return handleCreateSentenceLexical(request, env, origin, sentenceLexicalsMatch[1]);
-    return methodNotAllowed(origin);
+    return request.method === 'GET'
+      ? handleListSentenceLexicals(env, origin, sentenceLexicalsMatch[1])
+      : methodNotAllowed(origin);
   }
   const sentenceMatch = path.match(/^\/sentences\/([^/]+)$/);
   if (sentenceMatch) {
@@ -126,9 +116,7 @@ export async function routeAdminRequest(request: Request, env: Env, origin: stri
   }
 
   if (path === '/passages') {
-    if (request.method === 'GET') return handleListPassages(request, env, origin);
-    if (request.method === 'POST') return handleCreatePassage(request, env, origin);
-    return methodNotAllowed(origin);
+    return request.method === 'GET' ? handleListPassages(request, env, origin) : methodNotAllowed(origin);
   }
   if (path === '/passages/import/preview') {
     return request.method === 'POST' ? handlePreviewPassageImport(request, env, origin) : methodNotAllowed(origin);
@@ -136,8 +124,51 @@ export async function routeAdminRequest(request: Request, env: Env, origin: stri
   if (path === '/passages/import') {
     return request.method === 'POST' ? handleCommitPassageImport(request, env, origin) : methodNotAllowed(origin);
   }
+  const passageLexicalCandidatesMatch = path.match(/^\/passages\/([^/]+)\/lexical-candidates$/);
+  if (passageLexicalCandidatesMatch) {
+    return request.method === 'GET'
+      ? handleListPassageLexicalCandidates(request, env, origin, passageLexicalCandidatesMatch[1])
+      : methodNotAllowed(origin);
+  }
+  const passageSentenceLexicalsMatch = path.match(/^\/passages\/([^/]+)\/sentences\/([^/]+)\/lexicals$/);
+  if (passageSentenceLexicalsMatch) {
+    return request.method === 'POST'
+      ? handleCreatePassageSentenceLexical(
+        request,
+        env,
+        origin,
+        passageSentenceLexicalsMatch[1],
+        passageSentenceLexicalsMatch[2],
+      )
+      : methodNotAllowed(origin);
+  }
+  const passageSentenceMappingsMatch = path.match(/^\/passages\/([^/]+)\/sentences\/([^/]+)\/lexical-mappings$/);
+  if (passageSentenceMappingsMatch) {
+    return request.method === 'POST'
+      ? handleReusePassageSentenceLexical(
+        request,
+        env,
+        origin,
+        passageSentenceMappingsMatch[1],
+        passageSentenceMappingsMatch[2],
+      )
+      : methodNotAllowed(origin);
+  }
+  const passageParagraphSentencesMatch = path.match(/^\/passages\/([^/]+)\/paragraphs\/([^/]+)\/sentences$/);
+  if (passageParagraphSentencesMatch) {
+    return request.method === 'POST'
+      ? handleCreatePassageParagraphSentence(
+        request,
+        env,
+        origin,
+        passageParagraphSentencesMatch[1],
+        passageParagraphSentencesMatch[2],
+      )
+      : methodNotAllowed(origin);
+  }
   const passageRuntimeMatch = path.match(/^\/passages\/([^/]+)\/runtime$/);
   if (passageRuntimeMatch) {
+    if (request.method === 'GET') return handleGetPassageRuntime(env, origin, passageRuntimeMatch[1]);
     if (request.method === 'PUT') return handlePublishPassageRuntime(env, origin, passageRuntimeMatch[1]);
     if (request.method === 'DELETE') return handleDeletePassageRuntime(env, origin, passageRuntimeMatch[1]);
     return methodNotAllowed(origin);
@@ -177,9 +208,9 @@ export async function routeAdminRequest(request: Request, env: Env, origin: stri
   }
   const paragraphSentencesMatch = path.match(/^\/paragraphs\/([^/]+)\/sentences$/);
   if (paragraphSentencesMatch) {
-    if (request.method === 'GET') return handleListParagraphSentences(env, origin, paragraphSentencesMatch[1]);
-    if (request.method === 'POST') return handleCreateParagraphSentence(request, env, origin, paragraphSentencesMatch[1]);
-    return methodNotAllowed(origin);
+    return request.method === 'GET'
+      ? handleListParagraphSentences(env, origin, paragraphSentencesMatch[1])
+      : methodNotAllowed(origin);
   }
   const paragraphMatch = path.match(/^\/paragraphs\/([^/]+)$/);
   if (paragraphMatch) {

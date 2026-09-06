@@ -6,6 +6,7 @@ const index = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8'
 const adminRouter = await readFile(new URL('../src/routes/admin.ts', import.meta.url), 'utf8')
 const userRouter = await readFile(new URL('../src/routes/user.ts', import.meta.url), 'utf8')
 const importHandlers = await readFile(new URL('../src/features/passage-import/handlers.ts', import.meta.url), 'utf8')
+const authoringHandlers = await readFile(new URL('../src/features/authoring/handlers.ts', import.meta.url), 'utf8')
 const migrationsDirectory = new URL('../migrations/', import.meta.url)
 const migrationFiles = (await readdir(migrationsDirectory)).filter((name) => name.endsWith('.sql')).sort()
 const migrations = await Promise.all(
@@ -20,13 +21,12 @@ function tableDefinition(name) {
   return match[1]
 }
 
-test('exposes the lexical CRUD routes', () => {
+test('exposes passage-first authoring and keeps sentence/lexical roots inspection-oriented', () => {
   assert.match(index, /routeAdminRequest/)
   assert.match(index, /routeUserRequest/)
   assert.match(index, /\/v1\/admin/)
   assert.match(index, /\/v1'/)
   assert.match(adminRouter, /path === '\/lexicals'/)
-  assert.match(adminRouter, /request\.method === 'POST'/)
   assert.match(adminRouter, /request\.method === 'PUT'/)
   assert.match(adminRouter, /request\.method === 'DELETE'/)
   assert.match(adminRouter, /sentence-lexicals/)
@@ -39,8 +39,17 @@ test('exposes the lexical CRUD routes', () => {
   assert.match(importHandlers, /handlePreviewPassageImport/)
   assert.match(importHandlers, /await env\.DB\.batch\(statements\)/)
   assert.match(importHandlers, /normalized_payload/)
-  assert.match(adminRouter, /lexicals\/check-duplicates/)
-  assert.match(adminRouter, /lexicals\/bulk/)
+  assert.match(adminRouter, /passageLexicalCandidatesMatch/)
+  assert.match(adminRouter, /passageSentenceLexicalsMatch/)
+  assert.match(adminRouter, /passageSentenceMappingsMatch/)
+  assert.match(adminRouter, /passageParagraphSentencesMatch/)
+  assert.match(authoringHandlers, /LEXICAL_CANDIDATES_EXIST/)
+  assert.match(authoringHandlers, /allow_duplicate/)
+  assert.match(authoringHandlers, /Chỉ được reuse lexical đã thuộc passage này|Lexical không thuộc passage này/)
+  assert.doesNotMatch(adminRouter, /lexicals\/check-duplicates|lexicals\/bulk/)
+  assert.doesNotMatch(importHandlers, /canonicalizeLexicals|lexicalByKey|resolveLexicalIds/)
+  assert.match(importHandlers, /mapping_id/)
+  assert.match(importHandlers, /JSON\.stringify\(lexical\.token_indexes\)/)
   assert.match(adminRouter, /taxonomies/)
   assert.match(adminRouter, /roadmaps/)
 })
@@ -87,22 +96,28 @@ test('seeds documented passage taxonomies with single-select CEFR', () => {
   assert.doesNotMatch(seed, /difficulty-internal|difficulty-lexile|lexile-/i)
 })
 
-test('exposes the fixed lexical types and keeps duplicate review separate from bulk writes', async () => {
+test('exposes fixed lexical types and resolves contextual duplicates inside a passage', async () => {
   const constants = await readFile(new URL('../src/features/lexicals/constants.ts', import.meta.url), 'utf8')
-  const handlers = await readFile(new URL('../src/features/lexicals/handlers.ts', import.meta.url), 'utf8')
   for (const type of ['vocabulary', 'phrase', 'collocation', 'phrasal_verb', 'idiom', 'pattern']) {
     assert.match(constants, new RegExp(`'${type}'`))
   }
-  assert.match(handlers, /handleCheckLexicalDuplicates/)
-  assert.match(handlers, /handleBulkLexicals/)
-  assert.match(handlers, /duplicate_in_batch/)
+  assert.match(authoringHandlers, /listCandidates/)
+  assert.match(authoringHandlers, /LOWER\(TRIM\(lexical\.text\)\)/)
+  assert.match(authoringHandlers, /handleReusePassageSentenceLexical/)
 })
 
 test('uses a fresh passage/paragraph schema with explicit ordered sentence mappings', () => {
   assert.match(schema, /CREATE TABLE IF NOT EXISTS lexicals/)
-  assert.match(schema, /CREATE UNIQUE INDEX IF NOT EXISTS idx_lexicals_text_type/)
+  assert.match(schema, /CREATE INDEX IF NOT EXISTS idx_lexicals_text_type/)
+  assert.doesNotMatch(schema, /CREATE UNIQUE INDEX IF NOT EXISTS idx_lexicals_text_type/)
   assert.match(schema, /CREATE TABLE IF NOT EXISTS sentences/)
   assert.match(schema, /CREATE TABLE IF NOT EXISTS sentence_lexicals/)
+  assert.match(schema, /token_indexes TEXT NOT NULL CHECK \(/)
+  assert.match(schema, /json_type\(token_indexes\) = 'array'/)
+  assert.doesNotMatch(schema, /trg_sentence_lexicals/)
+  assert.doesNotMatch(schema, /trg_paragraph_sentences/)
+  assert.match(schema, /CREATE VIEW IF NOT EXISTS sentence_passages/)
+  assert.match(schema, /CREATE VIEW IF NOT EXISTS passage_lexicals/)
   assert.match(schema, /CREATE TABLE IF NOT EXISTS passages/)
   assert.match(schema, /title_sentence_id TEXT NOT NULL/)
   assert.match(schema, /CREATE TABLE IF NOT EXISTS passages_runtime/)
@@ -147,8 +162,8 @@ test('models unified classification, difficulty, reading paths, progress, reward
 
   assert.match(schema, /ALTER TABLE passages ADD COLUMN difficulty INTEGER[\s\S]*?typeof\(difficulty\) = 'integer'/)
   assert.doesNotMatch(schema, /difficulty BETWEEN 0 AND 100/)
-  assert.match(schema, /trg_passage_terms_enforce_single_insert/)
-  assert.match(schema, /trg_passage_terms_enforce_single_update/)
+  assert.doesNotMatch(schema, /trg_passage_terms_enforce_single_insert/)
+  assert.doesNotMatch(schema, /trg_passage_terms_enforce_single_update/)
   assert.doesNotMatch(schema, /trg_passages_runtime_require_classification/)
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS difficulty_scales/)
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS difficulty_levels/)
@@ -156,9 +171,8 @@ test('models unified classification, difficulty, reading paths, progress, reward
   assert.doesNotMatch(schema, /lexile/i)
   assert.match(schema, /idx_learner_passages_one_active[\s\S]*?WHERE completed_at IS NULL/)
   assert.match(schema, /UNIQUE \(user_id, passage_id\)/)
-  assert.match(schema, /trg_learner_passages_validate_reward/)
   assert.match(schema, /trg_learner_passages_award_completion/)
-  assert.match(schema, /trg_learner_passages_completed_immutable/)
+  assert.equal(schema.match(/CREATE TRIGGER IF NOT EXISTS/g)?.length, 1)
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS users/)
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS learner_checkins/)
 })

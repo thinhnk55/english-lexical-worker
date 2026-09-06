@@ -49,60 +49,6 @@ CREATE TABLE IF NOT EXISTS passage_terms (
 CREATE INDEX IF NOT EXISTS idx_taxonomy_terms_parent ON taxonomy_terms(taxonomy_id, parent_id, position);
 CREATE INDEX IF NOT EXISTS idx_passage_terms_term ON passage_terms(term_id, passage_id);
 
--- A single-select taxonomy, such as CEFR, may contribute at most one term to a
--- passage. Multi-select taxonomies continue to support any number of terms.
-CREATE TRIGGER IF NOT EXISTS trg_passage_terms_enforce_single_insert
-BEFORE INSERT ON passage_terms
-WHEN EXISTS (
-  SELECT 1
-  FROM taxonomy_terms proposed
-  JOIN taxonomies taxonomy ON taxonomy.id = proposed.taxonomy_id
-  WHERE proposed.id = NEW.term_id
-    AND taxonomy.selection_mode = 'single'
-    AND EXISTS (
-      SELECT 1
-      FROM passage_terms assigned
-      JOIN taxonomy_terms existing ON existing.id = assigned.term_id
-      WHERE assigned.passage_id = NEW.passage_id
-        AND existing.taxonomy_id = proposed.taxonomy_id
-    )
-)
-BEGIN
-  SELECT RAISE(ABORT, 'passage already has a term for this single-select taxonomy');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_passage_terms_enforce_single_update
-BEFORE UPDATE OF passage_id, term_id ON passage_terms
-WHEN EXISTS (
-  SELECT 1
-  FROM taxonomy_terms proposed
-  JOIN taxonomies taxonomy ON taxonomy.id = proposed.taxonomy_id
-  WHERE proposed.id = NEW.term_id
-    AND taxonomy.selection_mode = 'single'
-    AND EXISTS (
-      SELECT 1
-      FROM passage_terms assigned
-      JOIN taxonomy_terms existing ON existing.id = assigned.term_id
-      WHERE assigned.passage_id = NEW.passage_id
-        AND existing.taxonomy_id = proposed.taxonomy_id
-        AND assigned.rowid <> OLD.rowid
-    )
-)
-BEGIN
-  SELECT RAISE(ABORT, 'passage already has a term for this single-select taxonomy');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_taxonomies_enforce_single_update
-BEFORE UPDATE OF selection_mode ON taxonomies
-WHEN NEW.selection_mode = 'single'
-  AND EXISTS (
-    SELECT 1
-    FROM passage_terms assigned
-    JOIN taxonomy_terms term ON term.id = assigned.term_id
-    WHERE term.taxonomy_id = NEW.id
-    GROUP BY assigned.passage_id
-    HAVING COUNT(*) > 1
-  )
-BEGIN
-  SELECT RAISE(ABORT, 'taxonomy has passages with multiple assigned terms');
-END;
+-- Single-select semantics are validated by the admin API before its atomic D1
+-- batch. Keeping that rule in application code makes authoring failures easier
+-- to understand and avoids hidden trigger behaviour.
