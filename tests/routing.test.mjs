@@ -64,7 +64,10 @@ test('stores canonical assets by entity id and removes R2 objects before D1 reco
   assert.match(mediaAssets, /audio:\s*'audio\/opus'/)
   assert.match(mediaAssets, /image:\s*'image\/avif'/)
   assert.match(mediaHandlers, /ASSET_BASE_URL/)
+  assert.match(mediaHandlers, /function isAvif/)
+  assert.match(mediaHandlers, /File image không phải AVIF hợp lệ/)
   assert.doesNotMatch(schema, /audio_version|media_assets|cleanup_jobs/)
+  assert.match(migrationByName.get('0009_add_passage_visual_bible.sql'), /ALTER TABLE passages ADD COLUMN visual_bible TEXT/)
   const deletePassageStart = passageHandlers.indexOf('export async function handleDeletePassage(')
   const assetDeletion = passageHandlers.indexOf('await deleteAssetKeys', deletePassageStart)
   const dataDeletion = passageHandlers.indexOf("env.DB.prepare('DELETE FROM passages", deletePassageStart)
@@ -81,6 +84,7 @@ test('splits the schema into progressive reading-domain migrations', () => {
     '0006_track_learner_reading.sql',
     '0007_add_rewards_and_streaks.sql',
     '0008_review_saved_lexicals.sql',
+    '0009_add_passage_visual_bible.sql',
   ])
 })
 

@@ -12,6 +12,7 @@ interface PassageRow {
   summary: string | null;
   difficulty: number | null;
   reward_points: number;
+  visual_bible: string | null;
 }
 
 interface PassageRuntimeRow {
@@ -61,6 +62,7 @@ interface PassageInput {
   summary: string | null;
   difficulty: number | null;
   reward_points: number;
+  visual_bible: string | null;
 }
 
 interface PassageTermRow {
@@ -187,12 +189,19 @@ async function readPassageInput(request: Request, origin: string): Promise<Passa
   if (!Number.isSafeInteger(rewardPoints) || (rewardPoints as number) < 0) {
     return errorResponse(400, 'VALIDATION_ERROR', 'reward_points phải là số nguyên không âm', origin);
   }
+  const visualBible = body.visual_bible === undefined || body.visual_bible === null
+    ? null
+    : typeof body.visual_bible === 'string' ? body.visual_bible.trim() || null : undefined;
+  if (visualBible === undefined || (visualBible && visualBible.length > 20_000)) {
+    return errorResponse(400, 'VALIDATION_ERROR', 'visual_bible phải là chuỗi tối đa 20000 ký tự hoặc null', origin);
+  }
   return {
     title_sentence_id: titleSentenceId,
     image: image ?? null,
     summary,
     difficulty: difficulty as number | null,
     reward_points: rewardPoints as number,
+    visual_bible: visualBible,
   };
 }
 
@@ -227,7 +236,7 @@ async function readParagraphSentenceInput(request: Request, origin: string): Pro
 
 async function getPassage(env: Env, id: string): Promise<PassageRow | null> {
   return env.DB.prepare(`
-    SELECT id, title_sentence_id, image, summary, difficulty, reward_points
+    SELECT id, title_sentence_id, image, summary, difficulty, reward_points, visual_bible
     FROM passages
     WHERE id = ?
   `).bind(id).first<PassageRow>();
@@ -326,7 +335,7 @@ async function getParagraphDetail(env: Env, paragraph: ParagraphRow) {
   };
 }
 
-async function getPassageDetail(env: Env, passage: PassageRow) {
+async function getPassageDetail(env: Env, passage: PassageRow, includeVisualBible = true) {
   const [titleSentence, paragraphs, bodySentences, lexicalRows, terms, activities] = await Promise.all([
     env.DB.prepare('SELECT id, text, tokens, translations, phonemes, audio, image FROM sentences WHERE id = ?')
       .bind(passage.title_sentence_id)
@@ -435,6 +444,7 @@ async function getPassageDetail(env: Env, passage: PassageRow) {
     summary: passage.summary,
     difficulty: passage.difficulty,
     reward_points: passage.reward_points,
+    ...(includeVisualBible ? { visual_bible: passage.visual_bible } : {}),
     title: sentenceDetail(titleSentence),
     terms: terms.results.map(row => ({
       id: row.id,
@@ -475,13 +485,13 @@ async function getPassageDetail(env: Env, passage: PassageRow) {
 // passages_runtime and avoid authoring joins.
 export async function buildPassageDetail(env: Env, passageId: string): Promise<unknown | null> {
   const passage = await getPassage(env, passageId);
-  return passage ? getPassageDetail(env, passage) : null;
+  return passage ? getPassageDetail(env, passage, false) : null;
 }
 
 async function publishPassageRuntime(env: Env, passageId: string) {
   const passage = await getPassage(env, passageId);
   if (!passage) throw new Error('Passage not found while publishing runtime');
-  const payload = await getPassageDetail(env, passage);
+  const payload = await getPassageDetail(env, passage, false);
   await env.DB.prepare(`
     INSERT INTO passages_runtime (passage_id, payload, updated_at)
     VALUES (?, ?, unixepoch())
@@ -644,7 +654,7 @@ export async function handleUpdatePassage(request: Request, env: Env, origin: st
     await env.DB.batch([
       env.DB.prepare(`
         UPDATE passages
-        SET title_sentence_id = ?, image = ?, summary = ?, difficulty = ?, reward_points = ?
+        SET title_sentence_id = ?, image = ?, summary = ?, difficulty = ?, reward_points = ?, visual_bible = ?
         WHERE id = ?
       `).bind(
         input.title_sentence_id,
@@ -652,6 +662,7 @@ export async function handleUpdatePassage(request: Request, env: Env, origin: st
         input.summary,
         input.difficulty,
         input.reward_points,
+        input.visual_bible,
         id,
       ),
       ...invalidateRuntimeStatements(env, [id]),

@@ -14,6 +14,16 @@ import {
 
 const MAX_ASSET_BYTES = 15 * 1024 * 1024;
 
+function isAvif(data: ArrayBuffer): boolean {
+  const bytes = new Uint8Array(data);
+  if (bytes.length < 16 || String.fromCharCode(...bytes.slice(4, 8)) !== 'ftyp') return false;
+  for (let index = 8; index + 3 < Math.min(bytes.length, 64); index += 4) {
+    const brand = String.fromCharCode(...bytes.slice(index, index + 4));
+    if (brand === 'avif' || brand === 'avis') return true;
+  }
+  return false;
+}
+
 const ENTITY_TABLE: Record<AssetEntity, string> = {
   passages: 'passages',
   paragraphs: 'paragraphs',
@@ -66,7 +76,11 @@ export async function handlePutAsset(
 
   const key = assetKey(target.entity, id, target.kind);
   try {
-    await env.ASSETS.put(key, request.body, {
+    const body = target.kind === 'image' ? await request.arrayBuffer() : request.body;
+    if (target.kind === 'image' && !isAvif(body as ArrayBuffer)) {
+      return errorResponse(415, 'VALIDATION_ERROR', 'File image không phải AVIF hợp lệ', origin);
+    }
+    await env.ASSETS.put(key, body, {
       httpMetadata: { contentType: expectedType },
       customMetadata: { entity: target.entity, entityId: id, kind: target.kind },
     });

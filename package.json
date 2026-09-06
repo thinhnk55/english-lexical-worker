@@ -1,6 +1,6 @@
 {
   "name": "english-lexical-worker",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "Lexical resources API on Cloudflare Workers",
   "private": true,
   "devDependencies": {
