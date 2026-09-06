@@ -18,7 +18,7 @@ export default {
     if (url.pathname === '/' || url.pathname === '/info') {
       return new Response(JSON.stringify({
         name: 'english-lexical-worker',
-        version: '2.2.0',
+        version: '2.2.1',
         api: {
           admin: '/v1/admin',
           user: '/v1',
