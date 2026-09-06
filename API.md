@@ -102,7 +102,7 @@ Assets nằm trong R2 bucket `english-lexical-assets` và dùng ID dữ liệu l
 - `sentences/:id/audio.opus`, `sentences/:id/image.avif`
 - `lexicals/:id/audio.opus`, `lexicals/:id/image.avif`
 
-Upload hoặc thay thế bằng `PUT /admin/media/:entity/:id/:kind` với raw body và đúng `Content-Type` (`audio/opus` hoặc `image/avif`). Xóa riêng asset bằng `DELETE` cùng URL. API lưu public URL có `?v=<uuid>` trực tiếp vào field `audio`/`image`; không có field version riêng và không tạo object version mới. Public asset đọc qua `GET|HEAD /assets/:canonicalKey`.
+Upload hoặc thay thế bằng `PUT /admin/media/:entity/:id/:kind` với raw body và đúng `Content-Type` (`audio/opus` hoặc `image/avif`). Xóa riêng asset bằng `DELETE` cùng URL. Lần upload đầu lưu URL sạch; mỗi lần thay thế tăng query cache-busting tuần tự (`?v=2`, `?v=3`, ...). API chỉ trả về và lưu `url` trực tiếp trong field `audio`/`image`; không lưu field version hay key R2. Public asset đọc qua `GET|HEAD /assets/:canonicalKey`.
 
 Các API xóa passage, paragraph, sentence hoặc lexical luôn chờ xóa canonical objects trên R2 trước rồi mới xóa dữ liệu D1. Nếu R2 lỗi, dữ liệu D1 được giữ nguyên để admin retry.
 

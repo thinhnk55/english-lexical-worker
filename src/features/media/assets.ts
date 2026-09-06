@@ -29,6 +29,21 @@ export function assetKey(entity: AssetEntity, id: string, kind: AssetKind): stri
   return `${entity}/${id}/${kind}.${kind === 'audio' ? 'opus' : 'avif'}`;
 }
 
+export function nextAssetUrl(baseUrl: string, key: string, currentUrl: string | null): string {
+  const canonicalUrl = `${baseUrl.replace(/\/$/, '')}/${key}`;
+  if (!currentUrl) return canonicalUrl;
+
+  try {
+    const currentVersion = Number(new URL(currentUrl).searchParams.get('v'));
+    const nextVersion = Number.isSafeInteger(currentVersion) && currentVersion >= 2
+      ? currentVersion + 1
+      : 2;
+    return `${canonicalUrl}?v=${nextVersion}`;
+  } catch {
+    return `${canonicalUrl}?v=2`;
+  }
+}
+
 export function entityAssetKeys(entity: AssetEntity, id: string): string[] {
   return ENTITY_KINDS[entity].map(kind => assetKey(entity, id, kind));
 }

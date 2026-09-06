@@ -1,12 +1,12 @@
 import { invalidateRuntimeStatements, passageIdsForLexical, passageIdsForSentence } from '../authoring/context';
 import { buildCorsHeaders } from '../../utils/cors';
 import { errorResponse, successResponse } from '../../utils/response';
-import { generateUUIDv7 } from '../../utils/uuid';
 import {
   assetContentType,
   assetKey,
   deleteAssetKeys,
   isAssetEntity,
+  nextAssetUrl,
   supportsAssetKind,
   type AssetEntity,
   type AssetKind,
@@ -49,7 +49,10 @@ export async function handlePutAsset(
 ): Promise<Response> {
   const target = readTarget(entityValue, kindValue);
   if (!target) return errorResponse(400, 'VALIDATION_ERROR', 'Loại asset không được hỗ trợ', origin);
-  if (!await entityExists(env, target.entity, id)) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+  const entity = await env.DB.prepare(
+    `SELECT id, ${target.kind} AS current_url FROM ${ENTITY_TABLE[target.entity]} WHERE id = ?`,
+  ).bind(id).first<{ id: string; current_url: string | null }>();
+  if (!entity) return errorResponse(404, 'NOT_FOUND', undefined, origin);
 
   const expectedType = assetContentType(target.kind);
   const contentType = request.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase();
@@ -67,14 +70,13 @@ export async function handlePutAsset(
       httpMetadata: { contentType: expectedType },
       customMetadata: { entity: target.entity, entityId: id, kind: target.kind },
     });
-    const version = generateUUIDv7();
-    const url = `${env.ASSET_BASE_URL}/${key}?v=${version}`;
+    const url = nextAssetUrl(env.ASSET_BASE_URL, key, entity.current_url);
     const passageIds = await passageIdsForAsset(env, target.entity, id);
     await env.DB.batch([
       env.DB.prepare(`UPDATE ${ENTITY_TABLE[target.entity]} SET ${target.kind} = ? WHERE id = ?`).bind(url, id),
       ...invalidateRuntimeStatements(env, passageIds),
     ]);
-    return successResponse(200, 'UPDATED', { key, url }, origin);
+    return successResponse(200, 'UPDATED', { url }, origin);
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
