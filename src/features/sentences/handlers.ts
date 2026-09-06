@@ -11,6 +11,12 @@ import {
   passageIdsForSentence,
   validateTokenIndexes,
 } from '../authoring/context';
+import {
+  deleteAssetKeys,
+  entityAssetKeys,
+  orphanLexicalIdsAfterMappingDeletion,
+  orphanLexicalIdsAfterSentenceDeletion,
+} from '../media/assets';
 
 const TEMPORARY_POSITION_OFFSET = 1_000_000;
 
@@ -269,6 +275,12 @@ export async function handleUpdateSentence(request: Request, env: Env, origin: s
         message: 'Hãy sửa mapping trước hoặc gửi drop_invalid_mappings=true để xóa mapping không còn hợp lệ.',
       }, origin);
     }
+    const orphanLexicalIds = await orphanLexicalIdsAfterMappingDeletion(
+      env,
+      invalidMappings.map(mapping => mapping.lexical_id),
+      invalidMappingIds,
+    );
+    await deleteAssetKeys(env, orphanLexicalIds.flatMap(lexicalId => entityAssetKeys('lexicals', lexicalId)));
     await env.DB.batch([
       env.DB.prepare('UPDATE sentences SET text = ?, tokens = ?, translations = ?, phonemes = ?, audio = ?, image = ? WHERE id = ?')
         .bind(input.text, JSON.stringify(input.tokens), input.translations ? JSON.stringify(input.translations) : null, input.phonemes, input.audio, input.image, id),
@@ -286,12 +298,21 @@ export async function handleDeleteSentence(env: Env, origin: string, id: string)
   try {
     const existing = await env.DB.prepare('SELECT id FROM sentences WHERE id = ?').bind(id).first<{ id: string }>();
     if (!existing) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const owner = await env.DB.prepare('SELECT passage_id FROM sentence_passages WHERE sentence_id = ?')
+      .bind(id).first<{ passage_id: string }>();
+    if (owner) return errorResponse(409, 'CONFLICT', 'Không thể xóa sentence đang được passage sử dụng', origin);
     const lexicalRows = await env.DB.prepare(`
       SELECT DISTINCT lexical_id FROM sentence_lexicals WHERE sentence_id = ?
     `).bind(id).all<{ lexical_id: string }>();
+    const lexicalIds = lexicalRows.results.map(row => row.lexical_id);
+    const orphanLexicalIds = await orphanLexicalIdsAfterSentenceDeletion(env, lexicalIds, [id]);
+    await deleteAssetKeys(env, [
+      ...entityAssetKeys('sentences', id),
+      ...orphanLexicalIds.flatMap(lexicalId => entityAssetKeys('lexicals', lexicalId)),
+    ]);
     await env.DB.batch([
       env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(id),
-      ...deleteOrphanLexicalStatements(env, lexicalRows.results.map(row => row.lexical_id)),
+      ...deleteOrphanLexicalStatements(env, lexicalIds),
     ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
@@ -325,6 +346,10 @@ export async function handleUpdateSentenceLexical(request: Request, env: Env, or
     if (!lexicalInPassage) {
       return errorResponse(409, 'CONFLICT', 'Chỉ được map lexical đã thuộc passage này', origin);
     }
+    const orphanLexicalIds = input.lexical_id === existing.lexical_id
+      ? []
+      : await orphanLexicalIdsAfterMappingDeletion(env, [existing.lexical_id], [id]);
+    await deleteAssetKeys(env, orphanLexicalIds.flatMap(lexicalId => entityAssetKeys('lexicals', lexicalId)));
     await env.DB.batch([
       env.DB.prepare('UPDATE sentence_lexicals SET lexical_id = ?, position = ?, token_indexes = ? WHERE id = ?')
         .bind(input.lexical_id, input.position, JSON.stringify(input.token_indexes), id),
@@ -343,6 +368,8 @@ export async function handleDeleteSentenceLexical(env: Env, origin: string, id: 
     const mapping = await env.DB.prepare('SELECT sentence_id, lexical_id FROM sentence_lexicals WHERE id = ?').bind(id).first<{ sentence_id: string; lexical_id: string }>();
     if (!mapping) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     const passageIds = await passageIdsForSentence(env, mapping.sentence_id);
+    const orphanLexicalIds = await orphanLexicalIdsAfterMappingDeletion(env, [mapping.lexical_id], [id]);
+    await deleteAssetKeys(env, orphanLexicalIds.flatMap(lexicalId => entityAssetKeys('lexicals', lexicalId)));
     await env.DB.batch([
       env.DB.prepare('DELETE FROM sentence_lexicals WHERE id = ?').bind(id),
       ...deleteOrphanLexicalStatements(env, [mapping.lexical_id]),

@@ -7,6 +7,9 @@ const adminRouter = await readFile(new URL('../src/routes/admin.ts', import.meta
 const userRouter = await readFile(new URL('../src/routes/user.ts', import.meta.url), 'utf8')
 const importHandlers = await readFile(new URL('../src/features/passage-import/handlers.ts', import.meta.url), 'utf8')
 const authoringHandlers = await readFile(new URL('../src/features/authoring/handlers.ts', import.meta.url), 'utf8')
+const mediaHandlers = await readFile(new URL('../src/features/media/handlers.ts', import.meta.url), 'utf8')
+const mediaAssets = await readFile(new URL('../src/features/media/assets.ts', import.meta.url), 'utf8')
+const passageHandlers = await readFile(new URL('../src/features/passages/handlers.ts', import.meta.url), 'utf8')
 const migrationsDirectory = new URL('../migrations/', import.meta.url)
 const migrationFiles = (await readdir(migrationsDirectory)).filter((name) => name.endsWith('.sql')).sort()
 const migrations = await Promise.all(
@@ -52,6 +55,20 @@ test('exposes passage-first authoring and keeps sentence/lexical roots inspectio
   assert.match(importHandlers, /JSON\.stringify\(lexical\.token_indexes\)/)
   assert.match(adminRouter, /taxonomies/)
   assert.match(adminRouter, /roadmaps/)
+})
+
+test('stores canonical assets by entity id and removes R2 objects before D1 records', () => {
+  assert.match(index, /url\.pathname\.startsWith\('\/assets\/'\)/)
+  assert.match(adminRouter, /media\\\/\(passages\|paragraphs\|sentences\|lexicals\)/)
+  assert.match(mediaAssets, /`\$\{entity\}\/\$\{id\}\/\$\{kind\}/)
+  assert.match(mediaAssets, /audio:\s*'audio\/opus'/)
+  assert.match(mediaAssets, /image:\s*'image\/avif'/)
+  assert.match(mediaHandlers, /ASSET_BASE_URL/)
+  assert.doesNotMatch(schema, /audio_version|media_assets|cleanup_jobs/)
+  const deletePassageStart = passageHandlers.indexOf('export async function handleDeletePassage(')
+  const assetDeletion = passageHandlers.indexOf('await deleteAssetKeys', deletePassageStart)
+  const dataDeletion = passageHandlers.indexOf("env.DB.prepare('DELETE FROM passages", deletePassageStart)
+  assert.ok(assetDeletion > -1 && dataDeletion > assetDeletion)
 })
 
 test('splits the schema into progressive reading-domain migrations', () => {

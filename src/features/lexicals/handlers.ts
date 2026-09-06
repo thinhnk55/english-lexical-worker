@@ -4,6 +4,7 @@ import { isLexicalType, type LexicalType } from './constants';
 import { lexicalDraftMetadata } from './draft';
 import { parseOptionalMediaUrl } from '../../utils/media';
 import { invalidateRuntimeStatements, passageIdsForLexical } from '../authoring/context';
+import { deleteAssetKeys, entityAssetKeys } from '../media/assets';
 
 interface LexicalRow {
   id: string;
@@ -189,7 +190,11 @@ export async function handleDeleteLexical(env: Env, origin: string, id: string):
   try {
     const existing = await env.DB.prepare('SELECT id FROM lexicals WHERE id = ?').bind(id).first<{ id: string }>();
     if (!existing) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const learner = await env.DB.prepare('SELECT 1 AS used FROM learner_lexicals WHERE lexical_id = ? LIMIT 1')
+      .bind(id).first<{ used: number }>();
+    if (learner) return errorResponse(409, 'CONFLICT', 'Không thể xóa lexical đang được học viên lưu', origin);
     const passageIds = await passageIdsForLexical(env, id);
+    await deleteAssetKeys(env, entityAssetKeys('lexicals', id));
     await env.DB.batch([
       ...invalidateRuntimeStatements(env, passageIds),
       env.DB.prepare('DELETE FROM lexicals WHERE id = ?').bind(id),

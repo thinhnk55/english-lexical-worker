@@ -73,6 +73,7 @@ import {
   handleUpdateSentenceLexical,
 } from '../features/sentences/handlers';
 import { errorResponse } from '../utils/response';
+import { handleDeleteAsset, handlePutAsset } from '../features/media/handlers';
 
 function methodNotAllowed(origin: string): Response {
   return errorResponse(405, 'BAD_REQUEST', 'Method not allowed', origin);
@@ -80,6 +81,17 @@ function methodNotAllowed(origin: string): Response {
 
 export async function routeAdminRequest(request: Request, env: Env, origin: string, pathname: string): Promise<Response> {
   const path = pathname.slice('/v1/admin'.length) || '/';
+
+  const assetMatch = path.match(/^\/media\/(passages|paragraphs|sentences|lexicals)\/([^/]+)\/(audio|image)$/);
+  if (assetMatch) {
+    if (request.method === 'PUT') {
+      return handlePutAsset(request, env, origin, assetMatch[1], assetMatch[2], assetMatch[3]);
+    }
+    if (request.method === 'DELETE') {
+      return handleDeleteAsset(env, origin, assetMatch[1], assetMatch[2], assetMatch[3]);
+    }
+    return methodNotAllowed(origin);
+  }
 
   if (path === '/lexicals') {
     return request.method === 'GET' ? handleListLexicals(request, env, origin) : methodNotAllowed(origin);

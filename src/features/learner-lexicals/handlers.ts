@@ -1,6 +1,7 @@
 import { parsePagination } from '../../utils/pagination';
 import { errorResponse, successResponse } from '../../utils/response';
 import { deleteOrphanLexicalStatements } from '../authoring/context';
+import { deleteAssetKeys, entityAssetKeys } from '../media/assets';
 
 const DEFAULT_REVIEW_LIMIT = 20;
 const MAX_REVIEW_LIMIT = 50;
@@ -327,6 +328,17 @@ export async function handleDeleteLearnerLexical(
       SELECT 1 AS found FROM learner_lexicals WHERE user_id = ? AND lexical_id = ?
     `).bind(userId, lexicalId).first<{ found: number }>();
     if (!saved) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    const retained = await env.DB.prepare(`
+      SELECT
+        EXISTS(SELECT 1 FROM sentence_lexicals WHERE lexical_id = ?) AS has_sentence,
+        EXISTS(
+          SELECT 1 FROM learner_lexicals
+          WHERE lexical_id = ? AND user_id <> ?
+        ) AS has_learner
+    `).bind(lexicalId, lexicalId, userId).first<{ has_sentence: number; has_learner: number }>();
+    if (!retained?.has_sentence && !retained?.has_learner) {
+      await deleteAssetKeys(env, entityAssetKeys('lexicals', lexicalId));
+    }
     await env.DB.batch([
       env.DB.prepare(`
         DELETE FROM learner_lexicals

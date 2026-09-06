@@ -3,6 +3,7 @@ import { routeUserRequest } from './routes/user';
 import { requireAdmin, requireUser } from './utils/auth';
 import { getCorsOrigin } from './utils/cors';
 import { corsResponse, errorResponse } from './utils/response';
+import { handleGetAsset } from './features/media/handlers';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -28,6 +29,16 @@ export default {
           'Access-Control-Allow-Origin': origin || '*',
         },
       });
+    }
+
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname.startsWith('/assets/')) {
+      let key: string;
+      try {
+        key = decodeURIComponent(url.pathname.slice('/assets/'.length));
+      } catch {
+        return errorResponse(400, 'BAD_REQUEST', 'Asset path không hợp lệ', origin);
+      }
+      return handleGetAsset(request, env, origin, key);
     }
 
     if (url.pathname === '/v1/admin' || url.pathname.startsWith('/v1/admin/')) {

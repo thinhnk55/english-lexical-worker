@@ -94,6 +94,18 @@ Giới hạn một import: 1.5 MB, 50 paragraphs, 300 body sentences, 2.000 lexi
 
 Khi tạo lexical mới mà passage đã có candidate cùng text/type, API trả `409` với `reason: LEXICAL_CANDIDATES_EXIST`. Admin chọn endpoint reuse hoặc gửi lại `allow_duplicate: true` để xác nhận nghĩa ngữ cảnh mới.
 
+### Media assets
+
+Assets nằm trong R2 bucket `english-lexical-assets` và dùng ID dữ liệu làm canonical key:
+
+- `passages/:id/image.avif`, `paragraphs/:id/image.avif`
+- `sentences/:id/audio.opus`, `sentences/:id/image.avif`
+- `lexicals/:id/audio.opus`, `lexicals/:id/image.avif`
+
+Upload hoặc thay thế bằng `PUT /admin/media/:entity/:id/:kind` với raw body và đúng `Content-Type` (`audio/opus` hoặc `image/avif`). Xóa riêng asset bằng `DELETE` cùng URL. API lưu public URL có `?v=<uuid>` trực tiếp vào field `audio`/`image`; không có field version riêng và không tạo object version mới. Public asset đọc qua `GET|HEAD /assets/:canonicalKey`.
+
+Các API xóa passage, paragraph, sentence hoặc lexical luôn chờ xóa canonical objects trên R2 trước rồi mới xóa dữ liệu D1. Nếu R2 lỗi, dữ liệu D1 được giữ nguyên để admin retry.
+
 ### Taxonomy, activity, roadmap và runtime
 
 - Taxonomy: CRUD `/admin/taxonomies`, `/admin/taxonomies/:id/terms`, `/admin/taxonomy-terms/:id`.

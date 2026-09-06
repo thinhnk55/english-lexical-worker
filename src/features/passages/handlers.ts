@@ -3,6 +3,7 @@ import { parsePagination } from '../../utils/pagination';
 import { generateUUIDv7 } from '../../utils/uuid';
 import { parseOptionalMediaUrl } from '../../utils/media';
 import { deleteOrphanLexicalStatements, invalidateRuntimeStatements } from '../authoring/context';
+import { deleteAssetKeys, entityAssetKeys, orphanLexicalIdsAfterSentenceDeletion } from '../media/assets';
 
 interface PassageRow {
   id: string;
@@ -667,16 +668,36 @@ export async function handleDeletePassage(env: Env, origin: string, id: string):
   try {
     const passage = await getPassage(env, id);
     if (!passage) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+
+    const usage = await env.DB.prepare(`
+      SELECT
+        EXISTS(SELECT 1 FROM roadmap_passages WHERE passage_id = ?) AS in_roadmap,
+        EXISTS(SELECT 1 FROM learner_passages WHERE passage_id = ?) AS in_history
+    `).bind(id, id).first<{ in_roadmap: number; in_history: number }>();
+    if (usage?.in_roadmap || usage?.in_history) {
+      return errorResponse(409, 'CONFLICT', 'Passage đã được dùng trong roadmap hoặc lịch sử học nên không thể xóa', origin);
+    }
     const sentenceRows = await env.DB.prepare(`
       SELECT sentence_id FROM sentence_passages WHERE passage_id = ?
     `).bind(id).all<{ sentence_id: string }>();
+    const paragraphRows = await env.DB.prepare('SELECT id FROM paragraphs WHERE passage_id = ?')
+      .bind(id).all<{ id: string }>();
     const lexicalRows = await env.DB.prepare(`
       SELECT lexical_id FROM passage_lexicals WHERE passage_id = ?
     `).bind(id).all<{ lexical_id: string }>();
+    const sentenceIds = sentenceRows.results.map(row => row.sentence_id);
+    const lexicalIds = lexicalRows.results.map(row => row.lexical_id);
+    const orphanLexicalIds = await orphanLexicalIdsAfterSentenceDeletion(env, lexicalIds, sentenceIds);
+    await deleteAssetKeys(env, [
+      ...entityAssetKeys('passages', id),
+      ...paragraphRows.results.flatMap(row => entityAssetKeys('paragraphs', row.id)),
+      ...sentenceIds.flatMap(sentenceId => entityAssetKeys('sentences', sentenceId)),
+      ...orphanLexicalIds.flatMap(lexicalId => entityAssetKeys('lexicals', lexicalId)),
+    ]);
     await env.DB.batch([
       env.DB.prepare('DELETE FROM passages WHERE id = ?').bind(id),
-      ...sentenceRows.results.map(row => env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(row.sentence_id)),
-      ...deleteOrphanLexicalStatements(env, lexicalRows.results.map(row => row.lexical_id)),
+      ...sentenceIds.map(sentenceId => env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(sentenceId)),
+      ...deleteOrphanLexicalStatements(env, lexicalIds),
     ]);
     return successResponse(200, 'DELETED', undefined, origin);
   } catch (error) {
@@ -764,11 +785,19 @@ export async function handleDeleteParagraph(env: Env, origin: string, id: string
       JOIN paragraph_sentences owner ON owner.sentence_id = mapping.sentence_id
       WHERE owner.paragraph_id = ?
     `).bind(id).all<{ lexical_id: string }>();
+    const sentenceIds = sentenceRows.results.map(row => row.sentence_id);
+    const lexicalIds = lexicalRows.results.map(row => row.lexical_id);
+    const orphanLexicalIds = await orphanLexicalIdsAfterSentenceDeletion(env, lexicalIds, sentenceIds);
+    await deleteAssetKeys(env, [
+      ...entityAssetKeys('paragraphs', id),
+      ...sentenceIds.flatMap(sentenceId => entityAssetKeys('sentences', sentenceId)),
+      ...orphanLexicalIds.flatMap(lexicalId => entityAssetKeys('lexicals', lexicalId)),
+    ]);
     await env.DB.batch([
       env.DB.prepare('DELETE FROM paragraphs WHERE id = ?').bind(id),
       ...orderStatements(env, 'paragraphs', 'passage_id', paragraph.passage_id, ids),
-      ...sentenceRows.results.map(row => env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(row.sentence_id)),
-      ...deleteOrphanLexicalStatements(env, lexicalRows.results.map(row => row.lexical_id)),
+      ...sentenceIds.map(sentenceId => env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(sentenceId)),
+      ...deleteOrphanLexicalStatements(env, lexicalIds),
       ...invalidateRuntimeStatements(env, [paragraph.passage_id]),
     ]);
     return successResponse(200, 'DELETED', undefined, origin);
@@ -827,11 +856,17 @@ export async function handleDeleteParagraphSentence(env: Env, origin: string, id
     const lexicalRows = await env.DB.prepare(`
       SELECT DISTINCT lexical_id FROM sentence_lexicals WHERE sentence_id = ?
     `).bind(mapping.sentence_id).all<{ lexical_id: string }>();
+    const lexicalIds = lexicalRows.results.map(row => row.lexical_id);
+    const orphanLexicalIds = await orphanLexicalIdsAfterSentenceDeletion(env, lexicalIds, [mapping.sentence_id]);
+    await deleteAssetKeys(env, [
+      ...entityAssetKeys('sentences', mapping.sentence_id),
+      ...orphanLexicalIds.flatMap(lexicalId => entityAssetKeys('lexicals', lexicalId)),
+    ]);
     await env.DB.batch([
       env.DB.prepare('DELETE FROM paragraph_sentences WHERE id = ?').bind(id),
       ...orderStatements(env, 'paragraph_sentences', 'paragraph_id', mapping.paragraph_id, ids),
       env.DB.prepare('DELETE FROM sentences WHERE id = ?').bind(mapping.sentence_id),
-      ...deleteOrphanLexicalStatements(env, lexicalRows.results.map(row => row.lexical_id)),
+      ...deleteOrphanLexicalStatements(env, lexicalIds),
       ...invalidateRuntimeStatements(env, [mapping.passage_id]),
     ]);
     return successResponse(200, 'DELETED', undefined, origin);
