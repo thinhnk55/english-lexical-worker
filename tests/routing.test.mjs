@@ -85,7 +85,6 @@ test('splits the schema into progressive reading-domain migrations', () => {
     '0007_add_rewards_and_streaks.sql',
     '0008_review_saved_lexicals.sql',
     '0009_add_passage_visual_bible.sql',
-    '0010_move_media_to_r2_custom_domain.sql',
   ])
 })
 
