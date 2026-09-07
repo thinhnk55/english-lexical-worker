@@ -624,8 +624,8 @@ async function importTransaction(env: Env, imported: ImportPassage, termCodeIds:
   pushBulkInsert(env, statements, 'lexicals', 'id, text, type, translations, phonemes, audio, image', lexicals.map(lexical => [lexical.id, lexical.text, lexical.type, JSON.stringify(lexical.translations), lexical.phonemes, lexical.audio, lexical.image]), strategy === 'upsert'
     ? 'ON CONFLICT(id) DO UPDATE SET text = excluded.text, type = excluded.type, translations = excluded.translations, phonemes = excluded.phonemes, audio = excluded.audio, image = excluded.image'
     : '');
-  pushBulkInsert(env, statements, 'sentences', 'id, text, tokens, translations, phonemes, audio, image', sentences.map(sentence => [sentence.id, sentence.text, JSON.stringify(sentence.tokens), sentence.translations ? JSON.stringify(sentence.translations) : null, sentence.phonemes, sentence.audio, sentence.image]), strategy === 'upsert'
-    ? 'ON CONFLICT(id) DO UPDATE SET text = excluded.text, tokens = excluded.tokens, translations = excluded.translations, phonemes = excluded.phonemes, audio = excluded.audio, image = excluded.image'
+  pushBulkInsert(env, statements, 'sentences', 'id, text, tokens, translations, phonemes, pronunciations, audio, image', sentences.map(sentence => [sentence.id, sentence.text, JSON.stringify(sentence.tokens), sentence.translations ? JSON.stringify(sentence.translations) : null, sentence.phonemes, null, sentence.audio, sentence.image]), strategy === 'upsert'
+    ? 'ON CONFLICT(id) DO UPDATE SET text = excluded.text, tokens = excluded.tokens, translations = excluded.translations, phonemes = excluded.phonemes, pronunciations = NULL, audio = excluded.audio, image = excluded.image'
     : '');
   const passageSql = strategy === 'upsert'
     ? `INSERT INTO passages (id, title_sentence_id, image, summary, difficulty, reward_points)

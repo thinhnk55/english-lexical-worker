@@ -70,6 +70,7 @@ import {
   handleListSentenceLexicals,
   handleListSentences,
   handleUpdateSentence,
+  handleUpdateSentencePronunciations,
   handleUpdateSentenceLexical,
 } from '../features/sentences/handlers';
 import { errorResponse } from '../utils/response';
@@ -111,6 +112,12 @@ export async function routeAdminRequest(request: Request, env: Env, origin: stri
   if (sentenceLexicalsMatch) {
     return request.method === 'GET'
       ? handleListSentenceLexicals(env, origin, sentenceLexicalsMatch[1])
+      : methodNotAllowed(origin);
+  }
+  const sentencePronunciationsMatch = path.match(/^\/sentences\/([^/]+)\/pronunciations$/);
+  if (sentencePronunciationsMatch) {
+    return request.method === 'PUT'
+      ? handleUpdateSentencePronunciations(request, env, origin, sentencePronunciationsMatch[1])
       : methodNotAllowed(origin);
   }
   const sentenceMatch = path.match(/^\/sentences\/([^/]+)$/);

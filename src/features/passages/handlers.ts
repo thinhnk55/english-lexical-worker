@@ -33,6 +33,7 @@ interface SentenceRow {
   tokens: string | null;
   translations: string | null;
   phonemes: string | null;
+  pronunciations: string | null;
   audio: string | null;
   image: string | null;
 }
@@ -137,6 +138,7 @@ function parseSentence(row: SentenceRow) {
     tokens: Array.isArray(tokens) && tokens.every(token => typeof token === 'string') ? tokens : [],
     translations: isTranslationMap(translations) ? translations : null,
     phonemes: row.phonemes,
+    pronunciations: parseJson<unknown[]>(row.pronunciations, []),
     audio: row.audio,
     image: row.image,
   };
@@ -279,6 +281,7 @@ async function getParagraphDetail(env: Env, paragraph: ParagraphRow) {
         sentences.tokens,
         sentences.translations,
         sentences.phonemes,
+        sentences.pronunciations,
         sentences.audio,
         sentences.image
       FROM paragraph_sentences
@@ -337,7 +340,7 @@ async function getParagraphDetail(env: Env, paragraph: ParagraphRow) {
 
 async function getPassageDetail(env: Env, passage: PassageRow, includeVisualBible = true) {
   const [titleSentence, paragraphs, bodySentences, lexicalRows, terms, activities] = await Promise.all([
-    env.DB.prepare('SELECT id, text, tokens, translations, phonemes, audio, image FROM sentences WHERE id = ?')
+    env.DB.prepare('SELECT id, text, tokens, translations, phonemes, pronunciations, audio, image FROM sentences WHERE id = ?')
       .bind(passage.title_sentence_id)
       .first<SentenceRow>(),
     env.DB.prepare('SELECT id, passage_id, position, image FROM paragraphs WHERE passage_id = ? ORDER BY position ASC')
@@ -353,6 +356,7 @@ async function getPassageDetail(env: Env, passage: PassageRow, includeVisualBibl
         sentence.tokens,
         sentence.translations,
         sentence.phonemes,
+        sentence.pronunciations,
         sentence.audio,
         sentence.image
       FROM paragraph_sentences mapping

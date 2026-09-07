@@ -10,6 +10,7 @@ const authoringHandlers = await readFile(new URL('../src/features/authoring/hand
 const mediaHandlers = await readFile(new URL('../src/features/media/handlers.ts', import.meta.url), 'utf8')
 const mediaAssets = await readFile(new URL('../src/features/media/assets.ts', import.meta.url), 'utf8')
 const passageHandlers = await readFile(new URL('../src/features/passages/handlers.ts', import.meta.url), 'utf8')
+const sentenceHandlers = await readFile(new URL('../src/features/sentences/handlers.ts', import.meta.url), 'utf8')
 const migrationsDirectory = new URL('../migrations/', import.meta.url)
 const migrationFiles = (await readdir(migrationsDirectory)).filter((name) => name.endsWith('.sql')).sort()
 const migrations = await Promise.all(
@@ -85,7 +86,21 @@ test('splits the schema into progressive reading-domain migrations', () => {
     '0007_add_rewards_and_streaks.sql',
     '0008_review_saved_lexicals.sql',
     '0009_add_passage_visual_bible.sql',
+    '0010_add_sentence_pronunciations.sql',
   ])
+})
+
+test('stores token-aligned sentence pronunciation and inherits lexical CMU in one admin write', () => {
+  const migration = migrationByName.get('0010_add_sentence_pronunciations.sql')
+  assert.match(migration, /ALTER TABLE sentences\s+ADD COLUMN pronunciations TEXT/)
+  assert.match(migration, /json_type\(pronunciations\) = 'array'/)
+  assert.match(adminRouter, /sentencePronunciationsMatch/)
+  assert.match(adminRouter, /handleUpdateSentencePronunciations/)
+  assert.match(sentenceHandlers, /pronunciations phải bao phủ tất cả word tokens/)
+  assert.match(sentenceHandlers, /Lexical không thuộc sentence này/)
+  assert.match(sentenceHandlers, /UPDATE lexicals SET phonemes = \?, audio = NULL WHERE id = \? AND phonemes IS NULL/)
+  assert.match(sentenceHandlers, /deleteAssetKeys/)
+  assert.match(sentenceHandlers, /invalidateRuntimeStatements/)
 })
 
 test('seeds documented passage taxonomies with single-select CEFR', () => {

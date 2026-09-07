@@ -4,8 +4,19 @@ export interface SentenceRow {
   tokens: string | null;
   translations: string | null;
   phonemes: string | null;
+  pronunciations: string | null;
   audio: string | null;
   image: string | null;
+}
+
+export type PronunciationSource = 'single' | 'rule' | 'policy' | 'manual';
+
+export interface SentencePronunciation {
+  token_index: number;
+  text: string;
+  variant: number | null;
+  phonemes: string;
+  source: PronunciationSource;
 }
 
 export interface SentenceLexicalRow {
@@ -22,6 +33,7 @@ export interface Sentence {
   tokens: string[];
   translations: Record<string, string> | null;
   phonemes: string | null;
+  pronunciations: SentencePronunciation[];
   audio: string | null;
   image: string | null;
 }
