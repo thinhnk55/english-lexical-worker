@@ -11,6 +11,7 @@ const mediaHandlers = await readFile(new URL('../src/features/media/handlers.ts'
 const mediaAssets = await readFile(new URL('../src/features/media/assets.ts', import.meta.url), 'utf8')
 const passageHandlers = await readFile(new URL('../src/features/passages/handlers.ts', import.meta.url), 'utf8')
 const sentenceHandlers = await readFile(new URL('../src/features/sentences/handlers.ts', import.meta.url), 'utf8')
+const readAloudHandlers = await readFile(new URL('../src/features/learning/readAloud.ts', import.meta.url), 'utf8')
 const migrationsDirectory = new URL('../migrations/', import.meta.url)
 const migrationFiles = (await readdir(migrationsDirectory)).filter((name) => name.endsWith('.sql')).sort()
 const migrations = await Promise.all(
@@ -56,6 +57,17 @@ test('exposes passage-first authoring and keeps sentence/lexical roots inspectio
   assert.match(importHandlers, /JSON\.stringify\(lexical\.token_indexes\)/)
   assert.match(adminRouter, /taxonomies/)
   assert.match(adminRouter, /roadmaps/)
+})
+
+test('keeps learner read-aloud assessment behind the lexical worker', () => {
+  assert.match(userRouter, /path === '\/me\/read-aloud\/assess'/)
+  assert.match(userRouter, /handleAssessReadAloud/)
+  assert.match(readAloudHandlers, /assessmentSentence/)
+  assert.match(readAloudHandlers, /passages_runtime/)
+  assert.match(readAloudHandlers, /AI_INTERNAL_SECRET_KEY/)
+  assert.match(readAloudHandlers, /expected_pronunciation/)
+  assert.match(readAloudHandlers, /upstreamForm\.set\('text', sentence\.text\)/)
+  assert.doesNotMatch(readAloudHandlers, /form\.get\('text'\)/)
 })
 
 test('stores canonical assets by entity id and removes R2 objects before D1 records', () => {

@@ -19,6 +19,7 @@ import {
   handleSelectLearnerLexicalsForReview,
   handleUpdateLearnerLexicalReviewResults,
 } from '../features/learner-lexicals/handlers';
+import { handleAssessReadAloud } from '../features/learning/readAloud';
 import { errorResponse } from '../utils/response';
 
 function methodNotAllowed(origin: string): Response {
@@ -31,8 +32,15 @@ export async function routeUserRequest(
   origin: string,
   pathname: string,
   userId: string,
+  userRole?: string,
 ): Promise<Response> {
   const path = pathname.slice('/v1'.length) || '/';
+
+  if (path === '/me/read-aloud/assess') {
+    return request.method === 'POST'
+      ? handleAssessReadAloud(request, env, origin, userRole === 'admin' || userRole === 'super_admin')
+      : methodNotAllowed(origin);
+  }
 
   if (path === '/passages') {
     return request.method === 'GET' ? handleListPublishedPassages(request, env, origin) : methodNotAllowed(origin);
