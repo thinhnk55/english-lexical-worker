@@ -32,10 +32,10 @@ test('keeps only the atomic award trigger and awards a completed passage once', 
     sqlite(database, `
       INSERT INTO sentences (id, text, tokens) VALUES ('title', 'A title', '["A","title"]');
       INSERT INTO passages (id, title_sentence_id, reward_points) VALUES ('passage', 'title', 7);
-      INSERT INTO learner_passages (id, user_id, passage_id, mode)
-      VALUES ('invalid-reading', 'other-learner', 'passage', 'flexible');
-      INSERT INTO learner_passages (id, user_id, passage_id, mode)
-      VALUES ('reading', 'learner', 'passage', 'flexible');
+      INSERT INTO learner_passages (id, user_id, passage_id)
+      VALUES ('invalid-reading', 'other-learner', 'passage');
+      INSERT INTO learner_passages (id, user_id, passage_id)
+      VALUES ('reading', 'learner', 'passage');
       UPDATE learner_passages
       SET completed_at = unixepoch(), reward_points_awarded = (
         SELECT reward_points FROM passages WHERE id = learner_passages.passage_id

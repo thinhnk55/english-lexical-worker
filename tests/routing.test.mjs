@@ -87,6 +87,7 @@ test('splits the schema into progressive reading-domain migrations', () => {
     '0008_review_saved_lexicals.sql',
     '0009_add_passage_visual_bible.sql',
     '0010_add_sentence_pronunciations.sql',
+    '0011_simplify_learner_passage_progress.sql',
   ])
 })
 
@@ -191,7 +192,6 @@ test('models unified classification, difficulty, reading paths, progress, reward
     'roadmap_passages',
     'learner_profiles',
     'learner_passages',
-    'learner_activity_progress',
   ]) {
     tableDefinition(table)
   }
@@ -205,7 +205,12 @@ test('models unified classification, difficulty, reading paths, progress, reward
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS difficulty_levels/)
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS passage_difficulties/)
   assert.doesNotMatch(schema, /lexile/i)
-  assert.match(schema, /idx_learner_passages_one_active[\s\S]*?WHERE completed_at IS NULL/)
+  const learnerProgressMigration = migrationByName.get('0011_simplify_learner_passage_progress.sql')
+  assert.ok(learnerProgressMigration)
+  assert.match(learnerProgressMigration, /DROP TABLE IF EXISTS learner_activity_progress/)
+  assert.match(learnerProgressMigration, /progress TEXT NOT NULL DEFAULT '\{\}'/)
+  assert.match(learnerProgressMigration, /last_studied_at INTEGER NOT NULL/)
+  assert.match(learnerProgressMigration, /DROP INDEX IF EXISTS idx_learner_passages_one_active/)
   assert.match(schema, /UNIQUE \(user_id, passage_id\)/)
   assert.match(schema, /trg_learner_passages_award_completion/)
   assert.equal(schema.match(/CREATE TRIGGER IF NOT EXISTS/g)?.length, 1)
@@ -230,10 +235,10 @@ test('stores only learner-selected lexical review scores and exposes lightweight
   assert.match(userRouter, /path === '\/me\/lexicals\/review'/)
   assert.match(userRouter, /handleSelectLearnerLexicalsForReview/)
   assert.match(userRouter, /handleUpdateLearnerLexicalReviewResults/)
-  assert.match(userRouter, /me\/reading\/active/)
-  assert.match(userRouter, /me\/reading\/history/)
+  assert.match(userRouter, /me\/passages/)
+  assert.match(userRouter, /me\\\/passages\\\/\(\[\^\/\]\+\)\\\/progress/)
   assert.match(userRouter, /me\/reading\/summary/)
-  assert.match(userRouter, /handleCompleteActiveReading/)
+  assert.match(userRouter, /handleCompleteLearnerPassage/)
   assert.match(index, /requireUser/)
   assert.match(auth, /export async function requireUser/)
 

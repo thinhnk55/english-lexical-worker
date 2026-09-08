@@ -1,19 +1,16 @@
 import { handleGetTaxonomy, handleListTaxonomies } from '../features/classification/handlers';
 import {
-  handleAbandonActiveReading,
   handleCheckIn,
-  handleCompleteActiveReading,
-  handleGetActiveReading,
   handleGetLearnerProfile,
+  handleGetLearnerPassageProgress,
   handleGetPublishedPassage,
   handleGetPublishedRoadmap,
-  handleGetReadingHistoryItem,
   handleGetReadingSummary,
+  handleListLearnerPassages,
   handleListPublishedPassages,
   handleListPublishedRoadmaps,
-  handleListReadingHistory,
-  handleStartReading,
-  handleUpdateActiveReadingActivity,
+  handleCompleteLearnerPassage,
+  handleUpdateLearnerPassageProgress,
 } from '../features/learning/handlers';
 import {
   handleDeleteLearnerLexical,
@@ -65,28 +62,19 @@ export async function routeUserRequest(
       : methodNotAllowed(origin);
   }
 
-  if (path === '/me/reading/active') {
-    if (request.method === 'GET') return handleGetActiveReading(env, origin, userId);
-    if (request.method === 'POST') return handleStartReading(request, env, origin, userId);
-    if (request.method === 'DELETE') return handleAbandonActiveReading(env, origin, userId);
+  if (path === '/me/passages') {
+    return request.method === 'GET' ? handleListLearnerPassages(request, env, origin, userId) : methodNotAllowed(origin);
+  }
+  const learnerPassageProgressMatch = path.match(/^\/me\/passages\/([^/]+)\/progress$/);
+  if (learnerPassageProgressMatch) {
+    if (request.method === 'GET') return handleGetLearnerPassageProgress(env, origin, userId, learnerPassageProgressMatch[1]);
+    if (request.method === 'PUT') return handleUpdateLearnerPassageProgress(request, env, origin, userId, learnerPassageProgressMatch[1]);
     return methodNotAllowed(origin);
   }
-  if (path === '/me/reading/active/complete') {
-    return request.method === 'POST' ? handleCompleteActiveReading(env, origin, userId) : methodNotAllowed(origin);
-  }
-  const activeActivityMatch = path.match(/^\/me\/reading\/active\/activities\/([^/]+)$/);
-  if (activeActivityMatch) {
-    return request.method === 'PUT'
-      ? handleUpdateActiveReadingActivity(request, env, origin, userId, activeActivityMatch[1])
-      : methodNotAllowed(origin);
-  }
-  if (path === '/me/reading/history') {
-    return request.method === 'GET' ? handleListReadingHistory(request, env, origin, userId) : methodNotAllowed(origin);
-  }
-  const historyItemMatch = path.match(/^\/me\/reading\/history\/([^/]+)$/);
-  if (historyItemMatch) {
-    return request.method === 'GET'
-      ? handleGetReadingHistoryItem(env, origin, userId, historyItemMatch[1])
+  const learnerPassageCompleteMatch = path.match(/^\/me\/passages\/([^/]+)\/complete$/);
+  if (learnerPassageCompleteMatch) {
+    return request.method === 'POST'
+      ? handleCompleteLearnerPassage(request, env, origin, userId, learnerPassageCompleteMatch[1])
       : methodNotAllowed(origin);
   }
   if (path === '/me/reading/summary') {

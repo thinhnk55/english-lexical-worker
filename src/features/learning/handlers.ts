@@ -38,9 +38,9 @@ interface LearnerPassageRow {
   id: string;
   user_id: string;
   passage_id: string;
-  mode: 'fixed' | 'flexible';
-  roadmap_passage_id: string | null;
-  started_at: number;
+  progress: string;
+  first_started_at: number;
+  last_studied_at: number;
   completed_at: number | null;
   reward_points_awarded: number | null;
 }
@@ -70,6 +70,10 @@ interface ProfileRow {
   updated_at: number;
 }
 
+const MAX_PROGRESS_BYTES = 64 * 1024;
+
+// Kept only while the former active-reading handlers remain in this module.
+// New passage-scoped APIs persist the client-owned `progress` snapshot above.
 interface ActivityInput {
   status: string;
   score: number | null;
@@ -126,6 +130,67 @@ async function getRuntime(env: Env, passageId: string): Promise<RuntimeRow | nul
   return env.DB.prepare(`
     SELECT payload, updated_at FROM passages_runtime WHERE passage_id = ?
   `).bind(passageId).first<RuntimeRow>();
+}
+
+function parseProgressSnapshot(value: string): Record<string, unknown> {
+  const parsed = parseJson(value, {});
+  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+}
+
+async function readProgressSnapshot(request: Request, origin: string): Promise<Record<string, unknown> | Response> {
+  const body = await readObject(request, origin);
+  if (isResponse(body)) return body;
+  const progress = body.progress;
+  if (typeof progress !== 'object' || progress === null || Array.isArray(progress)) {
+    return errorResponse(400, 'VALIDATION_ERROR', 'progress phải là một JSON object', origin);
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(progress);
+  } catch {
+    return errorResponse(400, 'VALIDATION_ERROR', 'progress không thể chuyển thành JSON', origin);
+  }
+  if (new TextEncoder().encode(serialized).byteLength > MAX_PROGRESS_BYTES) {
+    return errorResponse(413, 'PAYLOAD_TOO_LARGE', 'progress vượt quá 64 KB', origin);
+  }
+  return progress as Record<string, unknown>;
+}
+
+async function getLearnerPassage(env: Env, userId: string, passageId: string): Promise<LearnerPassageRow | null> {
+  return env.DB.prepare(`
+    SELECT id, user_id, passage_id, progress, first_started_at, last_studied_at, completed_at, reward_points_awarded
+    FROM learner_passages
+    WHERE user_id = ? AND passage_id = ?
+  `).bind(userId, passageId).first<LearnerPassageRow>();
+}
+
+async function saveProgressSnapshot(
+  env: Env,
+  userId: string,
+  passageId: string,
+  progress: Record<string, unknown>,
+): Promise<void> {
+  await env.DB.prepare(`
+    INSERT INTO learner_passages (id, user_id, passage_id, progress, first_started_at, last_studied_at)
+    VALUES (?, ?, ?, ?, unixepoch(), unixepoch())
+    ON CONFLICT(user_id, passage_id) DO UPDATE SET
+      progress = excluded.progress,
+      last_studied_at = unixepoch()
+  `).bind(generateUUIDv7(), userId, passageId, JSON.stringify(progress)).run();
+}
+
+function presentLearnerPassage(row: LearnerPassageRow) {
+  return {
+    id: row.id,
+    passage_id: row.passage_id,
+    progress: parseProgressSnapshot(row.progress),
+    first_started_at: row.first_started_at,
+    last_studied_at: row.last_studied_at,
+    completed_at: row.completed_at,
+    reward_points_awarded: row.reward_points_awarded,
+  };
 }
 
 async function getActive(env: Env, userId: string): Promise<LearnerPassageRow | null> {
@@ -407,8 +472,8 @@ export async function handleGetPublishedRoadmap(env: Env, origin: string, userId
         passage.difficulty,
         passage.reward_points,
         reading.id AS learner_passage_id,
-        reading.mode,
-        reading.started_at,
+        reading.first_started_at,
+        reading.last_studied_at,
         reading.completed_at,
         reading.reward_points_awarded
       FROM roadmap_passages mapping
@@ -430,12 +495,133 @@ export async function handleGetPublishedRoadmap(env: Env, origin: string, userId
       difficulty: number | null;
       reward_points: number;
       learner_passage_id: string | null;
-      mode: 'fixed' | 'flexible' | null;
-      started_at: number | null;
+      first_started_at: number | null;
+      last_studied_at: number | null;
       completed_at: number | null;
       reward_points_awarded: number | null;
     }>();
     return successResponse(200, 'SUCCESS', { ...roadmap, passages: passages.results }, origin);
+  } catch (error) {
+    return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
+  }
+}
+
+export async function handleGetLearnerPassageProgress(
+  env: Env,
+  origin: string,
+  userId: string,
+  passageId: string,
+): Promise<Response> {
+  try {
+    const reading = await getLearnerPassage(env, userId, passageId);
+    return successResponse(200, 'SUCCESS', reading ? presentLearnerPassage(reading) : null, origin);
+  } catch (error) {
+    return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
+  }
+}
+
+export async function handleUpdateLearnerPassageProgress(
+  request: Request,
+  env: Env,
+  origin: string,
+  userId: string,
+  passageId: string,
+): Promise<Response> {
+  const progress = await readProgressSnapshot(request, origin);
+  if (isResponse(progress)) return progress;
+  try {
+    if (!await getRuntime(env, passageId)) return errorResponse(404, 'NOT_FOUND', 'Passage chưa được publish', origin);
+    await saveProgressSnapshot(env, userId, passageId, progress);
+    const reading = await getLearnerPassage(env, userId, passageId);
+    return successResponse(200, 'UPDATED', reading ? presentLearnerPassage(reading) : undefined, origin);
+  } catch (error) {
+    if (isConstraint(error)) return errorResponse(409, 'CONFLICT', error instanceof Error ? error.message : undefined, origin);
+    return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
+  }
+}
+
+export async function handleCompleteLearnerPassage(
+  request: Request,
+  env: Env,
+  origin: string,
+  userId: string,
+  passageId: string,
+): Promise<Response> {
+  const progress = await readProgressSnapshot(request, origin);
+  if (isResponse(progress)) return progress;
+  try {
+    if (!await getRuntime(env, passageId)) return errorResponse(404, 'NOT_FOUND', 'Passage chưa được publish', origin);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO learner_passages (id, user_id, passage_id, progress, first_started_at, last_studied_at)
+        VALUES (?, ?, ?, ?, unixepoch(), unixepoch())
+        ON CONFLICT(user_id, passage_id) DO UPDATE SET
+          progress = excluded.progress,
+          last_studied_at = unixepoch()
+      `).bind(generateUUIDv7(), userId, passageId, JSON.stringify(progress)),
+      env.DB.prepare(`
+        UPDATE learner_passages
+        SET
+          completed_at = unixepoch(),
+          reward_points_awarded = (SELECT reward_points FROM passages WHERE id = ?)
+        WHERE user_id = ? AND passage_id = ? AND completed_at IS NULL
+      `).bind(passageId, userId, passageId),
+    ]);
+    const [reading, profile] = await Promise.all([
+      getLearnerPassage(env, userId, passageId),
+      ensureProfile(env, userId),
+    ]);
+    return successResponse(200, 'UPDATED', {
+      reading: reading ? presentLearnerPassage(reading) : null,
+      awarded_points: reading?.reward_points_awarded ?? 0,
+      profile,
+    }, origin);
+  } catch (error) {
+    if (isConstraint(error)) return errorResponse(409, 'CONFLICT', error instanceof Error ? error.message : undefined, origin);
+    return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
+  }
+}
+
+export async function handleListLearnerPassages(request: Request, env: Env, origin: string, userId: string): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    const scope = url.searchParams.get('scope') ?? 'recent';
+    if (scope !== 'recent' && scope !== 'completed') {
+      return errorResponse(400, 'VALIDATION_ERROR', 'scope phải là recent hoặc completed', origin);
+    }
+    const { page, size, offset } = parsePagination(url);
+    const completionCondition = scope === 'completed' ? 'AND reading.completed_at IS NOT NULL' : '';
+    const orderBy = scope === 'completed' ? 'reading.completed_at DESC' : 'reading.last_studied_at DESC';
+    const [count, rows] = await Promise.all([
+      env.DB.prepare(`
+        SELECT COUNT(*) AS total FROM learner_passages reading
+        WHERE reading.user_id = ? ${completionCondition}
+      `).bind(userId).first<{ total: number }>(),
+      env.DB.prepare(`
+        SELECT
+          reading.id, reading.passage_id, reading.progress, reading.first_started_at,
+          reading.last_studied_at, reading.completed_at, reading.reward_points_awarded,
+          title.text AS title, passage.image, passage.summary, passage.difficulty
+        FROM learner_passages reading
+        JOIN passages passage ON passage.id = reading.passage_id
+        JOIN sentences title ON title.id = passage.title_sentence_id
+        WHERE reading.user_id = ? ${completionCondition}
+        ORDER BY ${orderBy}, reading.id ASC
+        LIMIT ? OFFSET ?
+      `).bind(userId, size, offset).all<LearnerPassageRow & {
+        title: string;
+        image: string | null;
+        summary: string | null;
+        difficulty: number | null;
+      }>(),
+    ]);
+    return successResponse(200, 'SUCCESS', rows.results.map(row => ({
+      ...presentLearnerPassage(row),
+      title: row.title,
+      image: row.image,
+      summary: row.summary,
+      difficulty: row.difficulty,
+    })), origin, { page, size, total: count?.total ?? 0 });
   } catch (error) {
     return errorResponse(500, 'INTERNAL_ERROR', error instanceof Error ? error.message : undefined, origin);
   }
@@ -689,7 +875,7 @@ export async function handleGetReadingHistoryItem(env: Env, origin: string, user
 export async function handleGetReadingSummary(env: Env, origin: string, userId: string): Promise<Response> {
   try {
     const profile = await ensureProfile(env, userId);
-    const [reading, activities, recent, lexicalReview] = await Promise.all([
+    const [reading, recent, lexicalReview] = await Promise.all([
       env.DB.prepare(`
         SELECT
           COUNT(*) AS completed_passages,
@@ -697,24 +883,6 @@ export async function handleGetReadingSummary(env: Env, origin: string, userId: 
         FROM learner_passages
         WHERE user_id = ? AND completed_at IS NOT NULL
       `).bind(userId).first<{ completed_passages: number; passage_points: number }>(),
-      env.DB.prepare(`
-        SELECT
-          activity.code,
-          COUNT(progress.score) AS scored_attempts,
-          AVG(progress.score) AS average_score,
-          MAX(progress.updated_at) AS last_updated_at
-        FROM learner_activity_progress progress
-        JOIN learner_passages learner_passage ON learner_passage.id = progress.learner_passage_id
-        JOIN passage_activities activity ON activity.id = progress.passage_activity_id
-        WHERE learner_passage.user_id = ?
-        GROUP BY activity.code
-        ORDER BY activity.code ASC
-      `).bind(userId).all<{
-        code: string;
-        scored_attempts: number;
-        average_score: number | null;
-        last_updated_at: number;
-      }>(),
       env.DB.prepare(`
         SELECT
           reading.id,
@@ -756,7 +924,6 @@ export async function handleGetReadingSummary(env: Env, origin: string, userId: 
       profile,
       completed_passages: reading?.completed_passages ?? 0,
       passage_points: reading?.passage_points ?? 0,
-      activity_results: activities.results,
       lexical_review: lexicalReview ?? {
         saved_lexicals: 0,
         reviewed_lexicals: 0,

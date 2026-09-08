@@ -119,10 +119,9 @@ Các API xóa passage, paragraph, sentence hoặc lexical luôn chờ xóa canon
 - Library runtime: `GET /passages`, `GET /passages/:id`. List hỗ trợ `text`, `difficulty_min`, `difficulty_max` và nhiều `term_id`.
 - Taxonomy hiển thị đa ngôn ngữ: `GET /taxonomies`, `GET /taxonomies/:id`.
 - Fixed roadmap: `GET /roadmaps`, `GET /roadmaps/:id`.
-- Một bài active: `GET|POST|DELETE /me/reading/active`. POST nhận `mode: flexible` hoặc `mode: fixed` cùng `roadmap_passage_id`. DELETE bỏ bài chưa hoàn thành và xóa luôn tiến độ của lần đó.
-- Kết quả nhiệm vụ: `PUT /me/reading/active/activities/:activityId`. Backend chỉ lưu trạng thái cuối, score/result/audio; FE quyết định điều kiện hoàn thành.
-- Xác nhận hoàn thành và nhận thưởng duy nhất: `POST /me/reading/active/complete`. Update có điều kiện và trigger thưởng liên bảng chạy nguyên tử, nên retry không cộng điểm lần hai.
-- Lịch sử: `GET /me/reading/history`, `GET /me/reading/history/:readingId`.
+- Tiến trình hiện tại: `GET|PUT /me/passages/:passageId/progress`. PUT nhận `{ "progress": { ... } }`, ghi đè snapshot Redux hiện tại; server không diễn giải cấu trúc activity, không lưu audio hoặc lịch sử attempt.
+- Hoàn thành và nhận thưởng duy nhất: `POST /me/passages/:passageId/complete`, cũng nhận snapshot `progress` cuối. Transaction ghi snapshot, chỉ đánh dấu completion một lần và cộng reward đúng một lần.
+- Danh sách bài đã/đang học: `GET /me/passages?scope=recent|completed`. Một user có thể học hoặc review nhiều passage cùng lúc; không có active passage dùng để khóa việc học.
 - Thống kê thực chất: `GET /me/reading/summary`.
 - Điểm/streak: `GET /me/profile`, `POST /me/reading/check-in`. Ngày được tính theo UTC+7; chỉ lưu streak hiện tại, dài nhất và ngày check-in cuối, không có bảng lịch sử điểm danh.
 - Lexical tự chọn: `GET|POST /me/lexicals`, `DELETE /me/lexicals/:lexicalId`.
