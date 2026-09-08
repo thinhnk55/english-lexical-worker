@@ -132,6 +132,11 @@ async function getRuntime(env: Env, passageId: string): Promise<RuntimeRow | nul
   `).bind(passageId).first<RuntimeRow>();
 }
 
+async function passageExists(env: Env, passageId: string): Promise<boolean> {
+  const row = await env.DB.prepare('SELECT id FROM passages WHERE id = ?').bind(passageId).first<{ id: string }>();
+  return Boolean(row);
+}
+
 function parseProgressSnapshot(value: string): Record<string, unknown> {
   const parsed = parseJson(value, {});
   return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
@@ -526,11 +531,14 @@ export async function handleUpdateLearnerPassageProgress(
   origin: string,
   userId: string,
   passageId: string,
+  allowDraftPreview = false,
 ): Promise<Response> {
   const progress = await readProgressSnapshot(request, origin);
   if (isResponse(progress)) return progress;
   try {
-    if (!await getRuntime(env, passageId)) return errorResponse(404, 'NOT_FOUND', 'Passage chưa được publish', origin);
+    if (!await getRuntime(env, passageId) && (!allowDraftPreview || !await passageExists(env, passageId))) {
+      return errorResponse(404, 'NOT_FOUND', 'Passage chưa được publish', origin);
+    }
     await saveProgressSnapshot(env, userId, passageId, progress);
     const reading = await getLearnerPassage(env, userId, passageId);
     return successResponse(200, 'UPDATED', reading ? presentLearnerPassage(reading) : undefined, origin);
