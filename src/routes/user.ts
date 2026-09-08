@@ -31,7 +31,6 @@ export async function routeUserRequest(
   origin: string,
   pathname: string,
   userId: string,
-  role: string,
 ): Promise<Response> {
   const path = pathname.slice('/v1'.length) || '/';
 
@@ -69,14 +68,7 @@ export async function routeUserRequest(
   const learnerPassageProgressMatch = path.match(/^\/me\/passages\/([^/]+)\/progress$/);
   if (learnerPassageProgressMatch) {
     if (request.method === 'GET') return handleGetLearnerPassageProgress(env, origin, userId, learnerPassageProgressMatch[1]);
-    if (request.method === 'PUT') return handleUpdateLearnerPassageProgress(
-      request,
-      env,
-      origin,
-      userId,
-      learnerPassageProgressMatch[1],
-      role === 'admin' || role === 'super_admin',
-    );
+    if (request.method === 'PUT') return handleUpdateLearnerPassageProgress(request, env, origin, userId, learnerPassageProgressMatch[1]);
     return methodNotAllowed(origin);
   }
   const learnerPassageCompleteMatch = path.match(/^\/me\/passages\/([^/]+)\/complete$/);

@@ -531,14 +531,11 @@ export async function handleUpdateLearnerPassageProgress(
   origin: string,
   userId: string,
   passageId: string,
-  allowDraftPreview = false,
 ): Promise<Response> {
   const progress = await readProgressSnapshot(request, origin);
   if (isResponse(progress)) return progress;
   try {
-    if (!await getRuntime(env, passageId) && (!allowDraftPreview || !await passageExists(env, passageId))) {
-      return errorResponse(404, 'NOT_FOUND', 'Passage chưa được publish', origin);
-    }
+    if (!await passageExists(env, passageId)) return errorResponse(404, 'NOT_FOUND', 'Passage không tồn tại', origin);
     await saveProgressSnapshot(env, userId, passageId, progress);
     const reading = await getLearnerPassage(env, userId, passageId);
     return successResponse(200, 'UPDATED', reading ? presentLearnerPassage(reading) : undefined, origin);
