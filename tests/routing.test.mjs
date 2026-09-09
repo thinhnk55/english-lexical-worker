@@ -127,6 +127,8 @@ test('stores token-aligned sentence pronunciation and inherits lexical CMU in on
   assert.match(sentenceHandlers, /Lexical không thuộc sentence này/)
   assert.match(sentenceHandlers, /overwriteLexicals/)
   assert.match(sentenceHandlers, /normalizeLexicalCmu/)
+  assert.match(sentenceHandlers, /UPDATE lexicals SET phonemes = \? WHERE id = \?/)
+  assert.doesNotMatch(sentenceHandlers, /UPDATE lexicals SET phonemes = \?, audio = NULL/)
   assert.match(sentenceHandlers, /deleteAssetKeys/)
   assert.match(sentenceHandlers, /invalidateRuntimeStatements/)
 })

@@ -394,17 +394,16 @@ export async function handleUpdateSentencePronunciations(request: Request, env: 
     const pronunciationChanged = sentence.phonemes !== nextPhonemes || sentence.pronunciations !== JSON.stringify(pronunciations);
     const overwriteLexicals = value.overwrite_lexicals === true;
     const lexicalRows = lexicalInputs.length
-      ? await env.DB.prepare(`SELECT id, audio FROM lexicals WHERE id IN (${lexicalInputs.map(() => '?').join(', ')})${overwriteLexicals ? '' : ' AND phonemes IS NULL'}`).bind(...lexicalInputs.map(item => item.lexical_id)).all<{ id: string; audio: string | null }>()
-      : { results: [] as Array<{ id: string; audio: string | null }> };
+      ? await env.DB.prepare(`SELECT id FROM lexicals WHERE id IN (${lexicalInputs.map(() => '?').join(', ')})${overwriteLexicals ? '' : ' AND phonemes IS NULL'}`).bind(...lexicalInputs.map(item => item.lexical_id)).all<{ id: string }>()
+      : { results: [] as Array<{ id: string }> };
     await deleteAssetKeys(env, [
       ...(pronunciationChanged && sentence.audio ? entityAssetKeys('sentences', id).filter(key => key.endsWith('/audio.opus')) : []),
-      ...lexicalRows.results.filter(row => row.audio).flatMap(row => entityAssetKeys('lexicals', row.id).filter(key => key.endsWith('/audio.opus'))),
     ]);
     const passageIds = await passageIdsForSentence(env, id);
     await env.DB.batch([
       env.DB.prepare('UPDATE sentences SET pronunciations = ?, phonemes = ?, audio = ? WHERE id = ?')
         .bind(JSON.stringify(pronunciations), nextPhonemes, pronunciationChanged ? null : sentence.audio, id),
-      ...lexicalInputs.map(item => env.DB.prepare(`UPDATE lexicals SET phonemes = ?, audio = NULL WHERE id = ?${overwriteLexicals ? '' : ' AND phonemes IS NULL'}`).bind(item.phonemes, item.lexical_id)),
+      ...lexicalInputs.map(item => env.DB.prepare(`UPDATE lexicals SET phonemes = ? WHERE id = ?${overwriteLexicals ? '' : ' AND phonemes IS NULL'}`).bind(item.phonemes, item.lexical_id)),
       ...invalidateRuntimeStatements(env, passageIds),
     ]);
     return successResponse(200, 'UPDATED', {
