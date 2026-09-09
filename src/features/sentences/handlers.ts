@@ -66,6 +66,11 @@ function normalizeCmu(value: string): string | null {
   return tokens.length > 0 && tokens.every(token => CMU_TOKEN_PATTERN.test(token)) ? tokens.join(' ') : null;
 }
 
+function normalizeLexicalCmu(value: string): string | null {
+  const groups = value.split(/\s*-\s*/u).map(group => normalizeCmu(group)).filter((group): group is string => Boolean(group));
+  return groups.length > 0 ? groups.join('-') : null;
+}
+
 function readPronunciations(value: unknown, tokens: string[]): SentencePronunciation[] | null {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) return null;
@@ -371,7 +376,7 @@ export async function handleUpdateSentencePronunciations(request: Request, env: 
       if (typeof item !== 'object' || item === null || Array.isArray(item)) return errorResponse(400, 'VALIDATION_ERROR', 'Lexical pronunciation không hợp lệ', origin);
       const raw = item as Record<string, unknown>;
       const lexicalId = typeof raw.lexical_id === 'string' ? raw.lexical_id.trim() : '';
-      const phonemes = typeof raw.phonemes === 'string' ? normalizeCmu(raw.phonemes) : null;
+      const phonemes = typeof raw.phonemes === 'string' ? normalizeLexicalCmu(raw.phonemes) : null;
       if (!lexicalId || lexicalIds.has(lexicalId) || !phonemes) return errorResponse(400, 'VALIDATION_ERROR', 'Lexical pronunciation bị trùng hoặc không dùng CMU hợp lệ', origin);
       lexicalIds.add(lexicalId);
       lexicalInputs.push({ lexical_id: lexicalId, phonemes });

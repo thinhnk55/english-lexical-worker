@@ -9,6 +9,10 @@ interface LexicalAssessmentRow {
   phonemes: string | null;
 }
 
+function assessmentPhonemes(value: string): string {
+  return value.replace(/\s*-\s*/gu, ' ');
+}
+
 type LexicalAssessmentKind = 'pronunciation' | 'recognition';
 
 function isResponse(value: File | Response): value is Response {
@@ -89,7 +93,7 @@ async function proxyLexicalAssessment(
   const upstreamForm = new FormData();
   upstreamForm.set('text', lexical.text);
   if (kind === 'pronunciation' && lexical.phonemes?.trim()) {
-    upstreamForm.set('phonemes', lexical.phonemes.trim());
+    upstreamForm.set('phonemes', assessmentPhonemes(lexical.phonemes.trim()));
   }
   if (kind === 'recognition') {
     const expectedPronunciation = expectedSingleWordPronunciation(lexical);

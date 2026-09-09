@@ -78,7 +78,7 @@ test('keeps lexical pronunciation and recognition targets behind the lexical wor
   assert.match(userRouter, /handleAssessLexicalRecognition/)
   assert.match(lexicalAssessmentHandlers, /FROM passage_lexicals owner/)
   assert.match(lexicalAssessmentHandlers, /upstreamForm\.set\('text', lexical\.text\)/)
-  assert.match(lexicalAssessmentHandlers, /upstreamForm\.set\('phonemes', lexical\.phonemes\.trim\(\)\)/)
+  assert.match(lexicalAssessmentHandlers, /upstreamForm\.set\('phonemes', assessmentPhonemes\(lexical\.phonemes\.trim\(\)\)\)/)
   assert.match(lexicalAssessmentHandlers, /expectedSingleWordPronunciation/)
   assert.match(lexicalAssessmentHandlers, /AI_INTERNAL_SECRET_KEY/)
   assert.doesNotMatch(lexicalAssessmentHandlers, /form\.get\('text'\)/)
