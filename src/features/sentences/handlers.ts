@@ -67,8 +67,10 @@ function normalizeCmu(value: string): string | null {
 }
 
 function normalizeLexicalCmu(value: string): string | null {
+  const wrappedGroups = [...value.matchAll(/\/\s*([^/]+?)\s*\//gu)].map(match => normalizeCmu(match[1] ?? '')).filter((group): group is string => Boolean(group));
+  if (wrappedGroups.length > 0) return wrappedGroups.map(group => `/${group}/`).join(' ');
   const groups = value.split(/\s*-\s*/u).map(group => normalizeCmu(group)).filter((group): group is string => Boolean(group));
-  return groups.length > 0 ? groups.join('-') : null;
+  return groups.length > 0 ? groups.map(group => `/${group}/`).join(' ') : null;
 }
 
 function readPronunciations(value: unknown, tokens: string[]): SentencePronunciation[] | null {
@@ -390,8 +392,9 @@ export async function handleUpdateSentencePronunciations(request: Request, env: 
     }
     const nextPhonemes = pronunciations.map(item => item.phonemes).join(' ');
     const pronunciationChanged = sentence.phonemes !== nextPhonemes || sentence.pronunciations !== JSON.stringify(pronunciations);
+    const overwriteLexicals = value.overwrite_lexicals === true;
     const lexicalRows = lexicalInputs.length
-      ? await env.DB.prepare(`SELECT id, audio FROM lexicals WHERE id IN (${lexicalInputs.map(() => '?').join(', ')}) AND phonemes IS NULL`).bind(...lexicalInputs.map(item => item.lexical_id)).all<{ id: string; audio: string | null }>()
+      ? await env.DB.prepare(`SELECT id, audio FROM lexicals WHERE id IN (${lexicalInputs.map(() => '?').join(', ')})${overwriteLexicals ? '' : ' AND phonemes IS NULL'}`).bind(...lexicalInputs.map(item => item.lexical_id)).all<{ id: string; audio: string | null }>()
       : { results: [] as Array<{ id: string; audio: string | null }> };
     await deleteAssetKeys(env, [
       ...(pronunciationChanged && sentence.audio ? entityAssetKeys('sentences', id).filter(key => key.endsWith('/audio.opus')) : []),
@@ -401,7 +404,7 @@ export async function handleUpdateSentencePronunciations(request: Request, env: 
     await env.DB.batch([
       env.DB.prepare('UPDATE sentences SET pronunciations = ?, phonemes = ?, audio = ? WHERE id = ?')
         .bind(JSON.stringify(pronunciations), nextPhonemes, pronunciationChanged ? null : sentence.audio, id),
-      ...lexicalInputs.map(item => env.DB.prepare('UPDATE lexicals SET phonemes = ?, audio = NULL WHERE id = ? AND phonemes IS NULL').bind(item.phonemes, item.lexical_id)),
+      ...lexicalInputs.map(item => env.DB.prepare(`UPDATE lexicals SET phonemes = ?, audio = NULL WHERE id = ?${overwriteLexicals ? '' : ' AND phonemes IS NULL'}`).bind(item.phonemes, item.lexical_id)),
       ...invalidateRuntimeStatements(env, passageIds),
     ]);
     return successResponse(200, 'UPDATED', {

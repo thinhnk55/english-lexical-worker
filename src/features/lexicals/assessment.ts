@@ -10,7 +10,7 @@ interface LexicalAssessmentRow {
 }
 
 function assessmentPhonemes(value: string): string {
-  return value.replace(/\s*-\s*/gu, ' ');
+  return value.replace(/\/\s*|\s*\//gu, ' ').replace(/\s*-\s*/gu, ' ');
 }
 
 type LexicalAssessmentKind = 'pronunciation' | 'recognition';
@@ -21,7 +21,7 @@ function isResponse(value: File | Response): value is Response {
 
 function expectedSingleWordPronunciation(lexical: LexicalAssessmentRow): string | null {
   if (!SINGLE_WORD_PATTERN.test(lexical.text.trim()) || !lexical.phonemes?.trim()) return null;
-  const phonemes = lexical.phonemes.split(/\s+/u).filter(Boolean);
+  const phonemes = assessmentPhonemes(lexical.phonemes).split(/\s+/u).filter(Boolean);
   if (phonemes.length === 0) return null;
   return JSON.stringify({
     version: 1,
