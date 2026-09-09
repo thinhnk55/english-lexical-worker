@@ -99,7 +99,6 @@ test('splits the schema into progressive reading-domain migrations', () => {
     '0008_review_saved_lexicals.sql',
     '0009_add_passage_visual_bible.sql',
     '0010_add_sentence_pronunciations.sql',
-    '0011_simplify_learner_passage_progress.sql',
   ])
 })
 
@@ -217,12 +216,12 @@ test('models unified classification, difficulty, reading paths, progress, reward
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS difficulty_levels/)
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS passage_difficulties/)
   assert.doesNotMatch(schema, /lexile/i)
-  const learnerProgressMigration = migrationByName.get('0011_simplify_learner_passage_progress.sql')
+  const learnerProgressMigration = migrationByName.get('0006_track_learner_reading.sql')
   assert.ok(learnerProgressMigration)
-  assert.match(learnerProgressMigration, /DROP TABLE IF EXISTS learner_activity_progress/)
   assert.match(learnerProgressMigration, /progress TEXT NOT NULL DEFAULT '\{\}'/)
   assert.match(learnerProgressMigration, /last_studied_at INTEGER NOT NULL/)
-  assert.match(learnerProgressMigration, /DROP INDEX IF EXISTS idx_learner_passages_one_active/)
+  assert.doesNotMatch(learnerProgressMigration, /learner_activity_progress/)
+  assert.doesNotMatch(learnerProgressMigration, /idx_learner_passages_one_active/)
   assert.match(schema, /UNIQUE \(user_id, passage_id\)/)
   assert.match(schema, /trg_learner_passages_award_completion/)
   assert.equal(schema.match(/CREATE TRIGGER IF NOT EXISTS/g)?.length, 1)
