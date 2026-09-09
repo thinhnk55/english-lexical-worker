@@ -20,6 +20,10 @@ import {
   handleUpdateLearnerLexicalReviewResults,
 } from '../features/learner-lexicals/handlers';
 import { handleAssessReadAloud } from '../features/learning/readAloud';
+import {
+  handleAssessLexicalPronunciation,
+  handleAssessLexicalRecognition,
+} from '../features/lexicals/assessment';
 import { errorResponse } from '../utils/response';
 
 function methodNotAllowed(origin: string): Response {
@@ -40,6 +44,15 @@ export async function routeUserRequest(
     return request.method === 'POST'
       ? handleAssessReadAloud(request, env, origin, userRole === 'admin' || userRole === 'super_admin')
       : methodNotAllowed(origin);
+  }
+
+  const lexicalAssessmentMatch = path.match(/^\/me\/passages\/([^/]+)\/lexicals\/([^/]+)\/(pronunciation|recognition)\/assess$/);
+  if (lexicalAssessmentMatch) {
+    if (request.method !== 'POST') return methodNotAllowed(origin);
+    const allowUnpublished = userRole === 'admin' || userRole === 'super_admin';
+    return lexicalAssessmentMatch[3] === 'pronunciation'
+      ? handleAssessLexicalPronunciation(request, env, origin, lexicalAssessmentMatch[1], lexicalAssessmentMatch[2], allowUnpublished)
+      : handleAssessLexicalRecognition(request, env, origin, lexicalAssessmentMatch[1], lexicalAssessmentMatch[2], allowUnpublished);
   }
 
   if (path === '/passages') {

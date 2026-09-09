@@ -12,6 +12,8 @@ const mediaAssets = await readFile(new URL('../src/features/media/assets.ts', im
 const passageHandlers = await readFile(new URL('../src/features/passages/handlers.ts', import.meta.url), 'utf8')
 const sentenceHandlers = await readFile(new URL('../src/features/sentences/handlers.ts', import.meta.url), 'utf8')
 const readAloudHandlers = await readFile(new URL('../src/features/learning/readAloud.ts', import.meta.url), 'utf8')
+const lexicalAssessmentHandlers = await readFile(new URL('../src/features/lexicals/assessment.ts', import.meta.url), 'utf8')
+const wranglerConfig = await readFile(new URL('../wrangler.json', import.meta.url), 'utf8')
 const migrationsDirectory = new URL('../migrations/', import.meta.url)
 const migrationFiles = (await readdir(migrationsDirectory)).filter((name) => name.endsWith('.sql')).sort()
 const migrations = await Promise.all(
@@ -68,6 +70,19 @@ test('keeps learner read-aloud assessment behind the lexical worker', () => {
   assert.match(readAloudHandlers, /expected_pronunciation/)
   assert.match(readAloudHandlers, /upstreamForm\.set\('text', sentence\.text\)/)
   assert.doesNotMatch(readAloudHandlers, /form\.get\('text'\)/)
+})
+
+test('keeps lexical pronunciation and recognition targets behind the lexical worker', () => {
+  assert.match(userRouter, /lexicalAssessmentMatch/)
+  assert.match(userRouter, /handleAssessLexicalPronunciation/)
+  assert.match(userRouter, /handleAssessLexicalRecognition/)
+  assert.match(lexicalAssessmentHandlers, /FROM passage_lexicals owner/)
+  assert.match(lexicalAssessmentHandlers, /upstreamForm\.set\('text', lexical\.text\)/)
+  assert.match(lexicalAssessmentHandlers, /upstreamForm\.set\('phonemes', lexical\.phonemes\.trim\(\)\)/)
+  assert.match(lexicalAssessmentHandlers, /expectedSingleWordPronunciation/)
+  assert.match(lexicalAssessmentHandlers, /AI_INTERNAL_SECRET_KEY/)
+  assert.doesNotMatch(lexicalAssessmentHandlers, /form\.get\('text'\)/)
+  assert.match(wranglerConfig, /AI_WORD_ASSESSMENT_URL/)
 })
 
 test('stores canonical assets by entity id and removes R2 objects before D1 records', () => {

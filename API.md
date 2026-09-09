@@ -120,6 +120,7 @@ Các API xóa passage, paragraph, sentence hoặc lexical luôn chờ xóa canon
 - Taxonomy hiển thị đa ngôn ngữ: `GET /taxonomies`, `GET /taxonomies/:id`.
 - Fixed roadmap: `GET /roadmaps`, `GET /roadmaps/:id`.
 - Tiến trình hiện tại: `GET|PUT /me/passages/:passageId/progress`. PUT nhận `{ "progress": { ... } }`, ghi đè snapshot Redux hiện tại; server không diễn giải cấu trúc activity, không lưu audio hoặc lịch sử attempt.
+- Lexical learning lưu learning set và state machine trong snapshot activity `lexical_learning`. Chấm từ đứng riêng qua `POST /me/passages/:passageId/lexicals/:lexicalId/pronunciation/assess`; review speaking dùng Hybrid Whisper + acoustic qua endpoint tương tự với segment `recognition`.
 - Hoàn thành và nhận thưởng duy nhất: `POST /me/passages/:passageId/complete`, cũng nhận snapshot `progress` cuối. Transaction ghi snapshot, chỉ đánh dấu completion một lần và cộng reward đúng một lần.
 - Danh sách bài đã/đang học: `GET /me/passages?scope=recent|completed`. Một user có thể học hoặc review nhiều passage cùng lúc; không có active passage dùng để khóa việc học.
 - Thống kê thực chất: `GET /me/reading/summary`.
