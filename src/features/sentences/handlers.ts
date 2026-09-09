@@ -393,6 +393,7 @@ export async function handleUpdateSentencePronunciations(request: Request, env: 
     const nextPhonemes = pronunciations.map(item => item.phonemes).join(' ');
     const pronunciationChanged = sentence.phonemes !== nextPhonemes || sentence.pronunciations !== JSON.stringify(pronunciations);
     const overwriteLexicals = value.overwrite_lexicals === true;
+    const preserveAudio = value.preserve_audio === true;
     const lexicalRows = lexicalInputs.length
       ? await env.DB.prepare(`SELECT id FROM lexicals WHERE id IN (${lexicalInputs.map(() => '?').join(', ')})${overwriteLexicals ? '' : ' AND phonemes IS NULL'}`).bind(...lexicalInputs.map(item => item.lexical_id)).all<{ id: string }>()
       : { results: [] as Array<{ id: string }> };
@@ -402,7 +403,7 @@ export async function handleUpdateSentencePronunciations(request: Request, env: 
     const passageIds = await passageIdsForSentence(env, id);
     await env.DB.batch([
       env.DB.prepare('UPDATE sentences SET pronunciations = ?, phonemes = ?, audio = ? WHERE id = ?')
-        .bind(JSON.stringify(pronunciations), nextPhonemes, pronunciationChanged ? null : sentence.audio, id),
+        .bind(JSON.stringify(pronunciations), nextPhonemes, preserveAudio || !pronunciationChanged ? sentence.audio : null, id),
       ...lexicalInputs.map(item => env.DB.prepare(`UPDATE lexicals SET phonemes = ? WHERE id = ?${overwriteLexicals ? '' : ' AND phonemes IS NULL'}`).bind(item.phonemes, item.lexical_id)),
       ...invalidateRuntimeStatements(env, passageIds),
     ]);
