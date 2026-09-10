@@ -98,7 +98,7 @@ Khi tạo lexical mới mà passage đã có candidate cùng text/type, API tr�
 
 Assets nằm trong R2 bucket `english-lexical-assets` và dùng ID dữ liệu làm canonical key:
 
-- `passages/:id/image.avif`, `paragraphs/:id/image.avif`
+- `roadmaps/:id/image.avif`, `passages/:id/image.avif`, `paragraphs/:id/image.avif`
 - `sentences/:id/audio.opus`, `sentences/:id/image.avif`
 - `lexicals/:id/audio.opus`, `lexicals/:id/image.avif`
 

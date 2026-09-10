@@ -83,7 +83,7 @@ function methodNotAllowed(origin: string): Response {
 export async function routeAdminRequest(request: Request, env: Env, origin: string, pathname: string): Promise<Response> {
   const path = pathname.slice('/v1/admin'.length) || '/';
 
-  const assetMatch = path.match(/^\/media\/(passages|paragraphs|sentences|lexicals)\/([^/]+)\/(audio|image)$/);
+  const assetMatch = path.match(/^\/media\/(roadmaps|passages|paragraphs|sentences|lexicals)\/([^/]+)\/(audio|image)$/);
   if (assetMatch) {
     if (request.method === 'PUT') {
       return handlePutAsset(request, env, origin, assetMatch[1], assetMatch[2], assetMatch[3]);

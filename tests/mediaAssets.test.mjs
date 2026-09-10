@@ -5,7 +5,9 @@ import { assetKey, deleteAssetKeys, entityAssetKeys, nextAssetUrl } from '../src
 test('derives one stable canonical key from the entity id', () => {
   assert.equal(assetKey('sentences', 'sentence-01', 'audio'), 'sentences/sentence-01/audio.opus')
   assert.equal(assetKey('lexicals', 'lexical-01', 'image'), 'lexicals/lexical-01/image.avif')
+  assert.equal(assetKey('roadmaps', 'roadmap-01', 'image'), 'roadmaps/roadmap-01/image.avif')
   assert.deepEqual(entityAssetKeys('passages', 'passage-01'), ['passages/passage-01/image.avif'])
+  assert.deepEqual(entityAssetKeys('roadmaps', 'roadmap-01'), ['roadmaps/roadmap-01/image.avif'])
 })
 
 test('keeps the first asset URL clean and increments a numeric cache version on replacement', () => {

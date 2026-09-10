@@ -25,6 +25,7 @@ function isAvif(data: ArrayBuffer): boolean {
 }
 
 const ENTITY_TABLE: Record<AssetEntity, string> = {
+  roadmaps: 'roadmaps',
   passages: 'passages',
   paragraphs: 'paragraphs',
   sentences: 'sentences',
@@ -37,6 +38,7 @@ async function entityExists(env: Env, entity: AssetEntity, id: string): Promise<
 }
 
 async function passageIdsForAsset(env: Env, entity: AssetEntity, id: string): Promise<string[]> {
+  if (entity === 'roadmaps') return [];
   if (entity === 'passages') return [id];
   if (entity === 'sentences') return passageIdsForSentence(env, id);
   if (entity === 'lexicals') return passageIdsForLexical(env, id);
@@ -120,7 +122,7 @@ export async function handleDeleteAsset(
 }
 
 export async function handleGetAsset(request: Request, env: Env, origin: string, key: string): Promise<Response> {
-  if (!/^(passages|paragraphs|sentences|lexicals)\/[A-Za-z0-9_-]{1,128}\/(audio\.opus|image\.avif)$/.test(key)) {
+  if (!/^(roadmaps|passages|paragraphs|sentences|lexicals)\/[A-Za-z0-9_-]{1,128}\/(audio\.opus|image\.avif)$/.test(key)) {
     return errorResponse(404, 'NOT_FOUND', undefined, origin);
   }
   const wantsRange = request.headers.has('Range');

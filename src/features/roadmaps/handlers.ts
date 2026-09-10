@@ -2,6 +2,7 @@ import { parseOptionalMediaUrl } from '../../utils/media';
 import { parsePagination } from '../../utils/pagination';
 import { errorResponse, successResponse } from '../../utils/response';
 import { generateUUIDv7 } from '../../utils/uuid';
+import { deleteAssetKeys, entityAssetKeys } from '../media/assets';
 
 const TEMPORARY_POSITION_OFFSET = 1_000_000;
 
@@ -237,6 +238,8 @@ export async function handleUpdateRoadmap(request: Request, env: Env, origin: st
 
 export async function handleDeleteRoadmap(env: Env, origin: string, id: string): Promise<Response> {
   try {
+    if (!await getRoadmap(env, id)) return errorResponse(404, 'NOT_FOUND', undefined, origin);
+    await deleteAssetKeys(env, entityAssetKeys('roadmaps', id));
     const result = await env.DB.prepare('DELETE FROM roadmaps WHERE id = ?').bind(id).run();
     if (!result.meta.changes) return errorResponse(404, 'NOT_FOUND', undefined, origin);
     return successResponse(200, 'DELETED', undefined, origin);

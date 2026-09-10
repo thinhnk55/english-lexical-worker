@@ -88,7 +88,7 @@ test('keeps lexical pronunciation and recognition targets behind the lexical wor
 
 test('stores canonical assets by entity id and removes R2 objects before D1 records', () => {
   assert.match(index, /url\.pathname\.startsWith\('\/assets\/'\)/)
-  assert.match(adminRouter, /media\\\/\(passages\|paragraphs\|sentences\|lexicals\)/)
+  assert.match(adminRouter, /media\\\/\(roadmaps\|passages\|paragraphs\|sentences\|lexicals\)/)
   assert.match(mediaAssets, /`\$\{entity\}\/\$\{id\}\/\$\{kind\}/)
   assert.match(mediaAssets, /audio:\s*'audio\/opus'/)
   assert.match(mediaAssets, /image:\s*'image\/avif'/)

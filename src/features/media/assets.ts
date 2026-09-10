@@ -1,7 +1,8 @@
-export type AssetEntity = 'passages' | 'paragraphs' | 'sentences' | 'lexicals';
+export type AssetEntity = 'roadmaps' | 'passages' | 'paragraphs' | 'sentences' | 'lexicals';
 export type AssetKind = 'audio' | 'image';
 
 const ENTITY_KINDS: Record<AssetEntity, readonly AssetKind[]> = {
+  roadmaps: ['image'],
   passages: ['image'],
   paragraphs: ['image'],
   sentences: ['audio', 'image'],
