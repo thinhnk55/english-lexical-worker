@@ -13,6 +13,7 @@ const passageHandlers = await readFile(new URL('../src/features/passages/handler
 const sentenceHandlers = await readFile(new URL('../src/features/sentences/handlers.ts', import.meta.url), 'utf8')
 const readAloudHandlers = await readFile(new URL('../src/features/learning/readAloud.ts', import.meta.url), 'utf8')
 const lexicalAssessmentHandlers = await readFile(new URL('../src/features/lexicals/assessment.ts', import.meta.url), 'utf8')
+const learnerRoadmapHandlers = await readFile(new URL('../src/features/roadmaps/learner.ts', import.meta.url), 'utf8')
 const wranglerConfig = await readFile(new URL('../wrangler.json', import.meta.url), 'utf8')
 const migrationsDirectory = new URL('../migrations/', import.meta.url)
 const migrationFiles = (await readdir(migrationsDirectory)).filter((name) => name.endsWith('.sql')).sort()
@@ -114,6 +115,7 @@ test('splits the schema into progressive reading-domain migrations', () => {
     '0008_review_saved_lexicals.sql',
     '0009_add_passage_visual_bible.sql',
     '0010_add_sentence_pronunciations.sql',
+    '0011_add_learner_roadmaps.sql',
   ])
 })
 
@@ -222,6 +224,8 @@ test('models unified classification, difficulty, reading paths, progress, reward
     'roadmap_passages',
     'learner_profiles',
     'learner_passages',
+    'learner_roadmaps',
+    'learner_roadmap_passages',
   ]) {
     tableDefinition(table)
   }
@@ -246,6 +250,28 @@ test('models unified classification, difficulty, reading paths, progress, reward
   assert.equal(schema.match(/CREATE TRIGGER IF NOT EXISTS/g)?.length, 1)
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS users/)
   assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS learner_checkins/)
+})
+
+test('models selected curated roadmaps and one flexible roadmap per learner', () => {
+  const migration = migrationByName.get('0011_add_learner_roadmaps.sql')
+  assert.ok(migration)
+  const learnerRoadmaps = tableDefinition('learner_roadmaps')
+  const learnerRoadmapPassages = tableDefinition('learner_roadmap_passages')
+  assert.match(learnerRoadmaps, /kind TEXT NOT NULL CHECK \(kind IN \('curated', 'flexible'\)\)/)
+  assert.match(learnerRoadmaps, /FOREIGN KEY \(roadmap_id\) REFERENCES roadmaps\(id\) ON DELETE CASCADE/)
+  assert.match(learnerRoadmaps, /UNIQUE \(user_id, roadmap_id\)/)
+  assert.match(migration, /idx_learner_roadmaps_one_flexible/)
+  assert.match(learnerRoadmapPassages, /UNIQUE \(learner_roadmap_id, position\)/)
+  assert.match(learnerRoadmapPassages, /UNIQUE \(learner_roadmap_id, passage_id\)/)
+  assert.match(userRouter, /path === '\/me\/roadmaps'/)
+  assert.match(userRouter, /learnerRoadmapPassagesMatch/)
+  assert.match(userRouter, /handleSelectLearnerRoadmap/)
+  assert.match(userRouter, /handleAddLearnerRoadmapPassage/)
+  assert.match(learnerRoadmapHandlers, /current_passage/)
+  assert.match(learnerRoadmapHandlers, /table: 'roadmap_passages mapping'/)
+  assert.match(learnerRoadmapHandlers, /table: 'learner_roadmap_passages mapping'/)
+  assert.match(learnerRoadmapHandlers, /JOIN passages_runtime runtime/)
+  assert.doesNotMatch(learnerRoadmapHandlers, /idx_learner_passages_one_active/)
 })
 
 test('stores only learner-selected lexical review scores and exposes lightweight review APIs', async () => {

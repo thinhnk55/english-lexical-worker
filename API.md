@@ -111,14 +111,17 @@ Các API xóa passage, paragraph, sentence hoặc lexical luôn chờ xóa canon
 - Taxonomy: CRUD `/admin/taxonomies`, `/admin/taxonomies/:id/terms`, `/admin/taxonomy-terms/:id`.
 - Gán passage: `GET|PUT /admin/passages/:id/terms`. API kiểm tra taxonomy `single` như CEFR chỉ có một term.
 - Activity: `GET|POST /admin/passages/:id/activities`, `GET|PUT|DELETE /admin/activities/:id`. `code` và `position` là duy nhất trong passage; `config` để mở cho FE định nghĩa nhiệm vụ.
-- Fixed roadmap: CRUD `/admin/roadmaps`, `/admin/roadmaps/:id/passages`, `/admin/roadmap-passages/:id`; lifecycle dùng `POST /admin/roadmaps/:id/publish|unpublish|archive|unarchive`.
+- Roadmap do admin biên soạn: CRUD `/admin/roadmaps`, `/admin/roadmaps/:id/passages`, `/admin/roadmap-passages/:id`; lifecycle dùng `POST /admin/roadmaps/:id/publish|unpublish|archive|unarchive`. Admin có thể tạo A1–C2 hoặc roadmap khác; tên và cấp độ không bị hard-code.
 - Runtime: `GET|PUT|DELETE /admin/passages/:id/runtime`; PUT hydrate source graph thành snapshot, DELETE unpublish.
 
 ## Learner APIs
 
 - Library runtime: `GET /passages`, `GET /passages/:id`. List hỗ trợ `text`, `difficulty_min`, `difficulty_max` và nhiều `term_id`.
 - Taxonomy hiển thị đa ngôn ngữ: `GET /taxonomies`, `GET /taxonomies/:id`.
-- Fixed roadmap: `GET /roadmaps`, `GET /roadmaps/:id`.
+- Roadmap do admin biên soạn: `GET /roadmaps`, `GET /roadmaps/:id`.
+- Roadmap đã chọn: `GET /me/roadmaps`, `POST /me/roadmaps`, `GET /me/roadmaps/:learnerRoadmapId`. Gửi `{ "roadmap_id": "..." }` để chọn một roadmap đã publish; gửi `{ "type": "flexible" }` để lấy roadmap linh hoạt duy nhất của người học.
+- Roadmap linh hoạt: `POST /me/roadmaps/:learnerRoadmapId/passages` với `{ "passage_id": "...", "position"?: 0 }`; xóa bài đã thêm bằng `DELETE /me/roadmaps/:learnerRoadmapId/passages/:passageId`. Chỉ nhận passage đã publish.
+- Mỗi roadmap trả `current_passage` là bài đầu tiên chưa hoàn thành, cùng `next_passage`, danh sách passage và tổng tiến độ. Roadmap admin luôn theo danh sách mới nhất của admin; roadmap linh hoạt lưu danh sách passage do người học chọn.
 - Tiến trình hiện tại: `GET|PUT /me/passages/:passageId/progress`. PUT nhận `{ "progress": { ... } }`, ghi đè snapshot Redux hiện tại; server không diễn giải cấu trúc activity, không lưu audio hoặc lịch sử attempt.
 - Lexical learning lưu learning set và state machine trong snapshot activity `lexical_learning`. Chấm từ đứng riêng qua `POST /me/passages/:passageId/lexicals/:lexicalId/pronunciation/assess`; review speaking dùng Hybrid Whisper + acoustic qua endpoint tương tự với segment `recognition`.
 - Hoàn thành và nhận thưởng duy nhất: `POST /me/passages/:passageId/complete`, cũng nhận snapshot `progress` cuối. Transaction ghi snapshot, chỉ đánh dấu completion một lần và cộng reward đúng một lần.
@@ -129,4 +132,4 @@ Các API xóa passage, paragraph, sentence hoặc lexical luôn chờ xóa canon
 - Chọn lexical đáng review nhất: `GET /me/lexicals/review?limit=20` (tối đa 50), ưu tiên chưa đánh giá, điểm thấp rồi lâu chưa review.
 - Ghi kết quả review theo lô: `PUT /me/lexicals/review`. FE gửi `meaning_score`, `pronunciation_score`, `review_score`; BE chỉ xác thực và lưu.
 
-Backend không tự quyết định bài kế tiếp, điều kiện hoàn thành activity hay công thức chấm lexical. Các ràng buộc BE giữ là ownership, một bài active, một lần thưởng, fixed/flexible mode và tính toàn vẹn của mapping nội dung.
+Backend xác định bài kế tiếp trong từng roadmap từ thứ tự passage và lịch sử hoàn thành. Backend không chặn người học mở lại bài cũ hay mở passage theo đường dẫn khác; FE dùng `current_passage` để định hướng luồng học. Điều kiện hoàn thành activity và công thức chấm lexical vẫn do client quản lý; BE giữ ownership, một lần thưởng và tính toàn vẹn mapping nội dung.

@@ -13,6 +13,13 @@ import {
   handleUpdateLearnerPassageProgress,
 } from '../features/learning/handlers';
 import {
+  handleAddLearnerRoadmapPassage,
+  handleDeleteLearnerRoadmapPassage,
+  handleGetLearnerRoadmap,
+  handleListLearnerRoadmaps,
+  handleSelectLearnerRoadmap,
+} from '../features/roadmaps/learner';
+import {
   handleDeleteLearnerLexical,
   handleListLearnerLexicals,
   handleSaveLearnerLexical,
@@ -80,6 +87,36 @@ export async function routeUserRequest(
   if (roadmapMatch) {
     return request.method === 'GET'
       ? handleGetPublishedRoadmap(env, origin, userId, roadmapMatch[1])
+      : methodNotAllowed(origin);
+  }
+
+  if (path === '/me/roadmaps') {
+    if (request.method === 'GET') return handleListLearnerRoadmaps(env, origin, userId);
+    if (request.method === 'POST') return handleSelectLearnerRoadmap(request, env, origin, userId);
+    return methodNotAllowed(origin);
+  }
+  const learnerRoadmapPassageMatch = path.match(/^\/me\/roadmaps\/([^/]+)\/passages\/([^/]+)$/);
+  if (learnerRoadmapPassageMatch) {
+    return request.method === 'DELETE'
+      ? handleDeleteLearnerRoadmapPassage(
+        env,
+        origin,
+        userId,
+        learnerRoadmapPassageMatch[1],
+        learnerRoadmapPassageMatch[2],
+      )
+      : methodNotAllowed(origin);
+  }
+  const learnerRoadmapPassagesMatch = path.match(/^\/me\/roadmaps\/([^/]+)\/passages$/);
+  if (learnerRoadmapPassagesMatch) {
+    return request.method === 'POST'
+      ? handleAddLearnerRoadmapPassage(request, env, origin, userId, learnerRoadmapPassagesMatch[1])
+      : methodNotAllowed(origin);
+  }
+  const learnerRoadmapMatch = path.match(/^\/me\/roadmaps\/([^/]+)$/);
+  if (learnerRoadmapMatch) {
+    return request.method === 'GET'
+      ? handleGetLearnerRoadmap(env, origin, userId, learnerRoadmapMatch[1])
       : methodNotAllowed(origin);
   }
 
